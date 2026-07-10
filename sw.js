@@ -7,7 +7,7 @@
      fonts) — those must always go to the network so maps and sync behave
      exactly as before. The SW simply ignores them.
    - Bump CACHE_VERSION whenever you want to force-refresh the cached shell. */
-const CACHE_VERSION = 'salesly-v37';
+const CACHE_VERSION = 'salesly-v39';
 const SHELL = [
   './',
   './index.html',
