@@ -1131,6 +1131,10 @@ function labStatus(o){
 }
 const LAB_LABEL={active:"Active","new":"New",winback:"Winback",falloff:"Falloff",inactive:"Inactive"};
 function labChip(o){ const st=labStatus(o); return st?`<span class="labchip lab-${st}">${LAB_LABEL[st]}</span>`:""; }
+// Notes are shown/edited WITHOUT the machine-written 📊 LAB line; the line stays
+// in the stored value (it powers the tag + filters and the bridge maintains it).
+function stripLab(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>!/^\s*📊\s*LAB:/.test(l)).join("\n").replace(/^\n+|\n+$/g,""); }
+function labLines(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>/^\s*📊\s*LAB:/.test(l)).join("\n"); }
 // Imported rows (bridge clients now; future bulk prospect dumps use ids starting
 // with "b") — recognized so imports are never mistaken for rep activity.
 function isImport(o){ return !!labStatus(o)||String((o&&o.id)||"").charAt(0)==="b"; }
@@ -1243,7 +1247,7 @@ function groupsPass(o){
 function secondaryPass(o){
   const f=state.filter;
   if(f==="scanner"&&!(o.scanner&&o.scanner!=="None"&&o.scanner!==""))return false;
-  if(f==="notes"&&!o.notes)return false;
+  if(f==="notes"&&!stripLab(o.notes))return false;
   if(f==="custom"&&(o.seed||isImport(o)))return false;
   if(f==="d7"&&!(lastVisit(o)&&daysAgo(lastVisit(o))<=7))return false;
   if(f==="d30"&&!(lastVisit(o)&&daysAgo(lastVisit(o))<=30))return false;
@@ -1434,7 +1438,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v43o";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v44";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1475,7 +1479,7 @@ function renderInner(){
         </div>
         <div class="onm"><div class="otitle">${esc(o.name)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
         ${labChip(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
-        ${o.notes?'<span class="dot note"></span>':''}
+        ${stripLab(o.notes)?'<span class="dot note"></span>':''}
       </button>`;
     });
     html+=`</div></div>`;
@@ -1736,8 +1740,9 @@ function popupHTML(o){
   const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!=="";
   let dist="";
   if(userPos&&o.lat&&o.lng){ dist=`<div class="popup-meta">${haversine(userPos.lat,userPos.lng,o.lat,o.lng).toFixed(1)} mi away</div>`; }
-  const noteBlock = o.notes
-    ? `<div class="popup-note"><div class="pnl">Notes</div>${esc(o.notes)}</div>`
+  const cleanNotes = stripLab(o.notes);
+  const noteBlock = cleanNotes
+    ? `<div class="popup-note"><div class="pnl">Notes</div>${esc(cleanNotes)}</div>`
     : '';
   return `<div class="popup-nm">${esc(o.name)}</div>
     <a class="popup-ad" href="${mapAppleLink(o)}" target="_blank" rel="noopener" style="text-decoration:none;display:block;">${esc(o.addr)}, ${esc(o.city)}</a>
@@ -2045,17 +2050,18 @@ function refreshMap(filtered){
     const b=L.latLngBounds(pts.map(o=>[o.lat,o.lng])); b.extend([userPos.lat,userPos.lng]);
     try{ mapObj.fitBounds(b.pad(0.12),{maxZoom:15}); }catch(e){}
   } else if(pts.length){
-    // Zoom to the STATE view rather than the whole-pin extent (which reads as a
-    // country view once offices exist in many states). Prefer pins in the state
-    // the user is physically in, else their assigned territory; fall back to
-    // fitting everything only when no state can be resolved or it has no pins.
-    let fitPts=pts;
-    const stv=String(currentGeoState||repTerritory()||"").toLowerCase().trim();
-    if(stv){
-      const inSt=pts.filter(o=>String(o.state||"").toLowerCase().trim()===stv);
-      if(inSt.length) fitPts=inSt;
+    // Default (not-following) view priority:
+    //   1. a ~5-mile window around the user's position (their working area)
+    //   2. the pins in their state (GPS state, else assigned territory)
+    //   3. otherwise leave the map where it is — never yank out to a
+    //      whole-country fit now that offices exist in many states.
+    if(userPos){
+      try{ mapObj.fitBounds(L.latLng(userPos.lat,userPos.lng).toBounds(8047)); }catch(e){}
+    } else {
+      const stv=String(currentGeoState||repTerritory()||"").toLowerCase().trim();
+      const inSt=stv?pts.filter(o=>String(o.state||"").toLowerCase().trim()===stv):[];
+      if(inSt.length){ try{ mapObj.fitBounds(L.latLngBounds(inSt.map(o=>[o.lat,o.lng])).pad(0.05),{maxZoom:13}); }catch(e){} }
     }
-    try{ mapObj.fitBounds(L.latLngBounds(fitPts.map(o=>[o.lat,o.lng])).pad(0.05),{maxZoom:13}); }catch(e){}
   }
   drawUser();
 }
@@ -2445,7 +2451,7 @@ function openDetail(id){
     ${(o.visits&&o.visits.length)?`<div class="dl" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:6px;">Recent Visits</div>
     <div class="visitlist">${o.visits.slice(0,8).map(v=>{const dot=v.color?`<span class="vdot" style="background:${VCOLORS[v.color]||'#ccc'}"></span>`:'';const note=v.note?`<span class="vnotetag">${esc(v.note)}</span>`:'';const rep=v.rep?`<span class="vnotetag" style="background:var(--teal-wash);color:var(--teal-deep);">${esc(v.rep)}</span>`:'';return `<div class="visititem"><span class="vleft">${dot}${esc(fmtDate(v.date))}${note}${rep}</span></div>`;}).join('')}</div>`:''}
     <div class="dl" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:6px;">Notes</div>
-    <div class="notebox">${o.notes?esc(o.notes):'<span style="color:var(--ink-faint)">No notes yet.</span>'}</div>
+    <div class="notebox">${stripLab(o.notes)?esc(stripLab(o.notes)):'<span style="color:var(--ink-faint)">No notes yet.</span>'}</div>
     <div class="actions">
       <button class="btn btn-primary" data-edit="${o.id}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 4H4v16h16v-7"/><path d="M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit / Add Notes</button>
@@ -2496,7 +2502,7 @@ function openForm(id, prefill){
     <div class="fld"><label>Doctor(s)</label><input id="f_drs" value="${esc(o.drs)}" placeholder="Dr. Jane Smith"></div>
     <div class="fld"><label>Office Hours</label><input id="f_hours" value="${esc(o.hours)}" placeholder="Mon–Fri 8–5"></div>
     <div class="fld"><label>Visit Day / Time</label><input id="f_visit" value="${esc(o.visitDay)}" placeholder="Tue 10am"></div>
-    <div class="fld"><label>Notes</label><textarea id="f_notes" placeholder="Add notes…">${esc(o.notes)}</textarea><div class="dictate-hint">🎤 To talk instead of type, tap the field, then tap the microphone on your keyboard (next to the spacebar).</div></div>
+    <div class="fld"><label>Notes</label><textarea id="f_notes" placeholder="Add notes…">${esc(stripLab(o.notes))}</textarea><div class="dictate-hint">🎤 To talk instead of type, tap the field, then tap the microphone on your keyboard (next to the spacebar).</div></div>
     <div class="fld"><label>Visit history</label>
       <div class="visitbox">
         <div class="visitadd">
@@ -2636,7 +2642,10 @@ function saveForm(id,getScan,getVisits,getActive){
   const data={name,addr:g('f_addr'),city,zip:g('f_zip'),
     lat:parseFloat(g('f_lat'))||"",lng:parseFloat(g('f_lng'))||"",
     phone:g('f_phone'),email:g('f_email'),scanner:getScan(),lab:g('f_lab'),
-    drs:g('f_drs'),hours:g('f_hours'),visitDay:g('f_visit'),notes:g('f_notes'),visits,
+    drs:g('f_drs'),hours:g('f_hours'),visitDay:g('f_visit'),
+    notes:(function(){ const prev=id?(officeById(id)||{}).notes:""; const keep=labLines(prev); const typed=g('f_notes');
+      return keep?(typed?keep+"\n"+typed:keep):typed; })(),
+    visits,
     starterKit:(document.getElementById('f_starterkit')&&document.getElementById('f_starterkit').checked)?'Yes':'',
     welcomeEmail:(document.getElementById('f_welcomeemail')&&document.getElementById('f_welcomeemail').checked)?'Yes':'',
     pricelist:(function(){ const sel=document.getElementById('f_pricelist'); if(!sel)return ""; const v=sel.value; if(v==='Other'){ return g('f_pricelist_other'); } return v; })(),
@@ -2722,10 +2731,10 @@ function quickNote(id){
 /* ---------- export / email ---------- */
 function buildCSV(onlyVisited){
   const rows=DB.filter(o=>onlyVisited?isVisited(o):true);
-  const head=["Practice Name","Address","City","State","ZIP","Latitude","Longitude","County","Phone","Email","Scanner","Current Lab","Doctors","Office Hours","Visit Day/Time","Visited","Active","Added By","Last Visited","Latest Status","Logged By (latest)","Visit Count","All Visit Dates","Notes"];
+  const head=["Practice Name","Address","City","State","ZIP","Latitude","Longitude","County","Phone","Email","Scanner","Current Lab","Doctors","Office Hours","Visit Day/Time","Visited","Active","Added By","Last Visited","Latest Status","Logged By (latest)","Visit Count","All Visit Dates","Notes","Lab Status"];
   const q=v=>{v=(v==null?"":String(v));return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
   const lines=[head.join(",")];
-  rows.forEach(o=>lines.push([o.name,o.addr,o.city,"IL",o.zip,o.lat,o.lng,o.county||"",o.phone,o.email,o.scanner,o.lab||"",o.drs,o.hours,o.visitDay,isVisited(o)?"Yes":"No",o.active===false?"Inactive":"Active",o.addedBy||"",lastVisit(o)?fmtDate(lastVisit(o)):"",lastColor(o)?VLABEL[lastColor(o)]:"",(o.visits&&o.visits.length&&o.visits[0].rep)?o.visits[0].rep:"",(o.visits&&o.visits.length)||0,(o.visits&&o.visits.length)?o.visits.map(v=>fmtDate(v.date)+(v.color?" ("+VLABEL[v.color]+")":"")+(v.rep?" "+v.rep:"")).join(" | "):"",o.notes].map(q).join(",")));
+  rows.forEach(o=>lines.push([o.name,o.addr,o.city,"IL",o.zip,o.lat,o.lng,o.county||"",o.phone,o.email,o.scanner,o.lab||"",o.drs,o.hours,o.visitDay,isVisited(o)?"Yes":"No",o.active===false?"Inactive":"Active",o.addedBy||"",lastVisit(o)?fmtDate(lastVisit(o)):"",lastColor(o)?VLABEL[lastColor(o)]:"",(o.visits&&o.visits.length&&o.visits[0].rep)?o.visits[0].rep:"",(o.visits&&o.visits.length)||0,(o.visits&&o.visits.length)?o.visits.map(v=>fmtDate(v.date)+(v.color?" ("+VLABEL[v.color]+")":"")+(v.rep?" "+v.rep:"")).join(" | "):"",stripLab(o.notes),LAB_LABEL[labStatus(o)]||""].map(q).join(",")));
   return {csv:lines.join("\r\n"),count:rows.length};
 }
 function downloadCSV(onlyVisited){
