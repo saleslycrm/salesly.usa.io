@@ -644,7 +644,11 @@ async function detectGeoState(lat,lng,force){
     const res=await fetch(url,{headers:{"Accept":"application/json"}});
     if(!res.ok) return;
     const d=await res.json(); const a=d&&d.address?d.address:{};
-    const st=a.state||"";
+    // Only accept a RECOGNIZED US state — nominatim can hand back a county or
+    // blank, and storing that used to break state matching (a rep would see only
+    // the 30-mile GPS cushion instead of their whole state).
+    const raw=normStateName(a.state||"");
+    const st=(raw&&ALL_STATE_NAMES.indexOf(raw)>=0)?raw.replace(/\b\w/g,c=>c.toUpperCase()):"";
     if(st){ const prev=currentGeoState; currentGeoState=st; _geoStateAt={lat,lng}; if(prev!==st){ try{render();}catch(e){} } }
   }catch(e){ /* keep whatever we had */ }
 }
@@ -1529,25 +1533,27 @@ function renderInner(){
   const visitedByRep=(o)=>!!(o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===rf0));
   const addedByRep=(o)=>String(o.addedBy||"").replace(/\s+/g," ").toLowerCase().trim()===rf0;
   let tot,vis,personal,added,repName="";
-  // Territory-scope the stat base: a rep only counts offices in their state.
-  // Stats spec:
-  //   Offices   — every office in the rep's state (their prospect pool)
-  //   Visited   — earned/worked accounts in that state: real logged visits (any
-  //               rep) PLUS bridge-imported lab clients (marketing already earned
-  //               them). Grows as the rep logs visits. NOT personal attribution.
-  //   My Visits — only offices THIS rep has actually visited (starts at 0)
-  //   Added     — offices this rep pin-dropped or added manually. Imports (bridge
-  //               clients, future bulk dumps) are explicitly excluded.
-  const scoped=DB.filter(territoryPass);
+  // Stats spec (same philosophy for every rep, present and future):
+  //   Offices   — the TOTAL offices in the rep's working state (assigned
+  //               territory, else GPS state). Position-independent: no GPS
+  //               cushion, no filters. Admins count the whole book.
+  //   Visited   — offices in that state where a touch point exists: a lab
+  //               status (Active/New/Winback/Falloff/Inactive means the lab
+  //               synced them), a synced visited flag, or a logged visit.
+  //   X's Visits— only offices THIS rep has personally visited (starts at 0).
+  //   Added     — offices this rep pin-dropped or added themselves. Imports
+  //               (bridge clients, bulk uploads) never count.
+  const scoped=(isAdmin&&isAdmin())?DB.slice():DB.filter(labDialPass);
+  const touched=o=>!!((o.visits&&o.visits.length)||o.visited||labStatuses(o).length);
   if(rf0){
     repName=(REPS||[]).map(r=>r.name).find(n=>String(n).replace(/\s+/g," ").toLowerCase().trim()===rf0)||state.repFilter[0]||"";
     tot=scoped.length;
-    vis=scoped.filter(isVisited).length;
+    vis=scoped.filter(touched).length;
     personal=scoped.filter(visitedByRep).length;
     added=scoped.filter(o=>addedByRep(o)&&!isImport(o)).length;
   } else {
     tot=scoped.length;
-    vis=scoped.filter(isVisited).length;
+    vis=scoped.filter(touched).length;
     const meN=String((typeof ME!=="undefined"&&ME&&ME.name)||"").replace(/\s+/g," ").toLowerCase().trim();
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
