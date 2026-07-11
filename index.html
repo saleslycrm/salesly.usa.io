@@ -1130,6 +1130,26 @@ function labStatus(o){
   return "";
 }
 const LAB_LABEL={active:"Active","new":"New",winback:"Winback",falloff:"Falloff",inactive:"Inactive"};
+// ALL statuses on an office — one per 📊 LAB line. The bridge now writes one line
+// per DOCTOR ("📊 LAB: WINBACK · Dr. Carol White · …"), so counting lines counts
+// doctors, which makes the app's status dials match the Lab Dashboard's
+// Current/New/Winback/Falloff/Inactive tab and its Salesly Bridge totals.
+// Old-format single-line offices still count as one, exactly as before.
+function labStatuses(o){
+  const nts=o&&o.notes; if(!nts)return [];
+  const out=[];
+  String(nts).split("\n").forEach(l=>{
+    const m=l.match(/^\s*📊\s*LAB:\s*([A-Za-z ]+?)\s*(?:·|$)/);
+    if(!m)return;
+    const w=m[1].trim().toLowerCase();
+    if(w.indexOf("new")===0)out.push("new");
+    else if(w.indexOf("winback")===0)out.push("winback");
+    else if(w.indexOf("falloff")===0)out.push("falloff");
+    else if(w.indexOf("inactive")===0)out.push("inactive");
+    else if(w.indexOf("active")===0)out.push("active");
+  });
+  return out;
+}
 function labChip(o){ const st=labStatus(o); return st?`<span class="labchip lab-${st}">${LAB_LABEL[st]}</span>`:""; }
 // Notes are shown/edited WITHOUT the machine-written 📊 LAB line; the line stays
 // in the stored value (it powers the tag + filters and the bridge maintains it).
@@ -1240,7 +1260,7 @@ function groupsPass(o){
   if(state.gStatus==="active"&&o.active===false)return false;
   if(state.gStatus==="inactive"&&o.active!==false)return false;
   if(state.gHeat&&state.gHeat.length){ if(state.gHeat.indexOf(lastColor(o))<0)return false; }
-  if(state.gLab&&state.gLab.length){ if(state.gLab.indexOf(labStatus(o))<0)return false; }
+  if(state.gLab&&state.gLab.length){ const sts=labStatuses(o); if(!sts.some(s=>state.gLab.indexOf(s)>=0))return false; }
   return true;
 }
 // Secondary single-filters live in the "More" drawer (scanner/notes/custom/dates).
@@ -1267,15 +1287,16 @@ function repPass(o){
 const BORDER_MILES=30;
 function territoryPass(o){
   if(isAdmin&&isAdmin())return true;
-  // Border cushion: always show offices physically near the rep, any state.
-  if(userPos && o.lat && o.lng){
+  const assigned=repTerritory();
+  // Border cushion: ONLY for reps with no assigned territory. When a territory is
+  // set, the territory alone decides what's visible — so every rep on the same
+  // territory sees the exact same book (and the same status dials) no matter
+  // where they're physically standing. Territory-less reps keep the 30-mile
+  // cushion so border metros and road trips still work off pure GPS.
+  if(!assigned && userPos && o.lat && o.lng){
     if(haversine(userPos.lat,userPos.lng,+o.lat,+o.lng)<=BORDER_MILES) return true;
   }
-  // Assigned territory is the rep's home base and always wins; the GPS-derived
-  // state is only the fallback for reps with no territory set. (The 30-mile
-  // cushion above still shows whatever is physically around them, any state,
-  // so border metros and road trips keep working.)
-  const activeState=repTerritory()||currentGeoState;
+  const activeState=assigned||currentGeoState;
   if(!activeState)return true;                 // no territory or location yet -> see all
   const os=String(o.state||"").trim();
   if(!os)return false;                          // unknown-state office: not in any state view
@@ -1359,7 +1380,7 @@ function renderInner(){
     const ok=matchFilter(o); state.gLab=savedLab; return ok;
   });
   const lc={active:0,"new":0,winback:0,falloff:0,inactive:0};
-  labBase.forEach(o=>{ const st=labStatus(o); if(st in lc) lc[st]++; });
+  labBase.forEach(o=>{ labStatuses(o).forEach(st=>{ if(st in lc) lc[st]++; }); });
   ['active','new','winback','falloff','inactive'].forEach(k=>{ const el=document.getElementById('lc_'+k); if(el) el.textContent=lc[k].toLocaleString(); });
 
   // "Clear all" visible only when something is active
