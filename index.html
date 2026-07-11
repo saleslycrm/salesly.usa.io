@@ -592,7 +592,14 @@ function loadReps(){
   REPS.forEach(r=>{ if(r.role==="admin" && (!r.pin||!String(r.pin).trim())){ r.pin="2468"; changed=true; } });
   if(changed) saveReps();
 }
-function saveReps(){ try{localStorage.setItem(REPS_KEY,JSON.stringify(REPS));}catch(e){} }
+const REPS_TS_KEY="ildental_reps_ts";
+let REPS_TS=0; try{REPS_TS=parseInt(localStorage.getItem(REPS_TS_KEY)||"0",10)||0;}catch(e){}
+function persistReps(ts){ REPS_TS=ts||Date.now();
+  try{localStorage.setItem(REPS_KEY,JSON.stringify(REPS));localStorage.setItem(REPS_TS_KEY,String(REPS_TS));}catch(e){} }
+function saveReps(){ persistReps(Date.now());
+  // Reps ride team sync as a reserved "__reps__" row in the Sheet, so a rep
+  // added or edited on one device shows up on every device within a poll.
+  try{ if(cloudOn) setTimeout(()=>{try{cloudPush(true);}catch(e){}},400); }catch(e){} }
 function repById(id){ return REPS.find(r=>r.id===id)||null; }
 function repByName(n){ if(!n)return null; n=String(n).toLowerCase().trim(); return REPS.find(r=>String((r&&r.name)||"").toLowerCase()===n)||null; }
 function loadMe(){
@@ -687,7 +694,7 @@ let GS_TOKEN="Nh08rwbEMdxBvJDy-D_LAMo1";
 let ORS_KEY="eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImE4MGQzNTA4ZjgyYzQwZjA5MGNmNzQ3MDZjMjEzZGQxIiwiaCI6Im11cm11cjY0In0=";
 let GS_URL="";
 try{const c=JSON.parse(localStorage.getItem(GS_CFG_KEY)||"{}");GS_URL=c.url||"";if(c.token)GS_TOKEN=c.token;if(c.orsKey)ORS_KEY=c.orsKey;}catch(e){}
-let cloudOn=false, lastSyncJSON="", lastSheetJS="", pollTimer=null, pulling=false, pushing=false, lastRawRows=0, lastSyncAt=0, watchdog=null;
+let cloudOn=false, lastSyncJSON="", lastSheetJS="", pollTimer=null, pulling=false, pushing=false, lastRawRows=0, lastSyncAt=0, watchdog=null, lastSyncErr="";
 const POLL_MS=15000;
 
 function cloudInit(){
@@ -738,6 +745,7 @@ function rowsToStore(rows){
   const seenAddId={}, seenAddKey={};
   (rows||[]).forEach(r=>{
     const id=(r.id||"").trim(); if(!id) return;
+    if(id==="__reps__"){ try{ const j=JSON.parse(r.notes||"{}"); if(j&&Array.isArray(j.reps)) ns._reps=j; }catch(e){} return; }
     const visited=String(r.visited||"").trim().toLowerCase();
     if(id[0]==="s"){
       const idx=parseInt(id.slice(1),10); if(isNaN(idx)) return;
@@ -774,7 +782,7 @@ async function cloudPull(){
     const res=await fetch(GS_URL+(GS_URL.indexOf("?")<0?"?":"&")+"k="+encodeURIComponent(GS_TOKEN)+"&t="+Date.now(),{method:"GET"});
     if(!res.ok) throw new Error("http "+res.status);
     const text=await res.text();
-    if(text&&text.trim().toLowerCase()==="forbidden"){ toast("⚠️ Sync key rejected — check the token in your Apps Script."); return false; }
+    if(text&&text.trim().toLowerCase()==="forbidden"){ lastSyncErr="token rejected"; try{setSyncBadge();}catch(e){} toast("⚠️ Sync key rejected — check the token in your Apps Script."); return false; }
     const doc=text&&text.trim()?JSON.parse(text):null;
     if(doc&&doc.cols&&Array.isArray(doc.rows)){
       const cols=doc.cols.map(c=>String(c).trim());
@@ -782,7 +790,7 @@ async function cloudPull(){
       lastRawRows=objs.length;
       const ns=rowsToStore(objs);
       const js=JSON.stringify(ns);
-      lastSyncAt=Date.now();
+      lastSyncAt=Date.now(); lastSyncErr="";
       // The SHEET is the source of truth for shared data. A pull simply adopts
       // what the Sheet says (merged on top of the base SEED list in rebuild()).
       // We do NOT auto-push back — the app only writes when YOU add/edit/delete
@@ -792,7 +800,7 @@ async function cloudPull(){
       // against the carried store, an unsynced local add would make js!=last every
       // poll and re-fire this block (and the catch-up push) endlessly. Comparing
       // raw-sheet-to-raw-sheet means we only re-adopt when the SHEET truly changes.
-      if(seedN>0 && js!==lastSheetJS){
+      if(js!==lastSheetJS){   // adopt whenever the SHEET truly changed (even if the seed is still decompressing)
         lastSheetJS=js;
         // CRITICAL: a pull adopts the Sheet, but must NOT drop local changes that
         // haven't been pushed yet. Carry forward:
@@ -828,8 +836,15 @@ async function cloudPull(){
         });
         // local deletions the Sheet hasn't recorded yet
         (store.del||[]).forEach(idx=>{ if(ns.del.indexOf(idx)<0){ ns.del.push(idx); carried++; } });
+        const remoteReps=ns._reps; delete ns._reps;
         store=ns; lastSyncJSON=JSON.stringify(store);
         try{localStorage.setItem(SK,JSON.stringify(store));}catch(e){}
+        // Team roster: last write wins by timestamp — a rep added on any device
+        // reaches every other device here.
+        if(remoteReps && (remoteReps.updated||0)>REPS_TS && Array.isArray(remoteReps.reps) && remoteReps.reps.length){
+          REPS=remoteReps.reps.slice(); persistReps(remoteReps.updated||Date.now());
+          try{updateMeBadge();}catch(e){}
+        }
         // If we carried any local-only diffs forward, push them so the Sheet catches up.
         if(carried){ try{ setTimeout(()=>{ cloudPush(true); }, 800); }catch(e){} }
         changed=true;
@@ -837,7 +852,7 @@ async function cloudPull(){
     } else {
       emptySheet=true;   // no data rows yet — do NOT auto-seed; wait for a real edit
     }
-  }catch(e){}
+  }catch(e){ lastSyncErr=lastSyncErr||"connection error"; try{setSyncBadge();}catch(_){} }
   finally{ pulling=false; }   // ALWAYS release the lock, even on error
   return changed;
 }
@@ -860,6 +875,9 @@ async function cloudPush(silent){
           const cols=doc.cols.map(c=>String(c).trim());
           const objs=doc.rows.map(arr=>{const o={};cols.forEach((c,i)=>o[c]=arr[i]==null?"":arr[i]);return o;});
           remoteStore=rowsToStore(objs);
+          if(remoteStore._reps && (remoteStore._reps.updated||0)>REPS_TS && Array.isArray(remoteStore._reps.reps) && remoteStore._reps.reps.length){
+            REPS=remoteStore._reps.reps.slice(); persistReps(remoteStore._reps.updated||Date.now());
+          }
         }
       }
     }catch(e){ /* if read fails, fall back to writing our own (still safe: we never delete base offices) */ }
@@ -914,6 +932,14 @@ async function cloudPush(silent){
     store=merged;
     try{localStorage.setItem(SK,JSON.stringify(store));}catch(e){}
     const rows=storeToRows();
+    // The reps roster rides along as a reserved row (rowsToStore hides it from
+    // office lists on every device; the Lab Dashboard bridge passes it through).
+    try{
+      const rr={}; SHEET_COLS.forEach(c=>rr[c]="");
+      rr.id="__reps__"; rr.name="[Salesly reps roster — do not edit]";
+      rr.notes=JSON.stringify({v:1,updated:REPS_TS||Date.now(),reps:REPS});
+      rows.push(rr);
+    }catch(e){}
     const payload={cols:SHEET_COLS,rows:rows.map(r=>SHEET_COLS.map(c=>r[c]==null?"":r[c]))};
     lastSyncJSON=JSON.stringify(store);   // mark as ours so the next poll won't re-trigger
     const res=await fetch(GS_URL+(GS_URL.indexOf("?")<0?"?":"&")+"k="+encodeURIComponent(GS_TOKEN),{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});
@@ -975,7 +1001,7 @@ function cloudSaveConfig(url, token){
   try{localStorage.setItem(GS_CFG_KEY,JSON.stringify({url:GS_URL,token:GS_TOKEN}));}catch(e){}
 }
 
-let SEED=[], DB=[], state={tab:"city",filter:"all",q:"",openCity:null,view:"list",dFrom:"",dTo:"",expand:"",repFilter:"",
+let SEED=[], DB=[], state={tab:"city",filter:[],q:"",openCity:null,view:"list",dFrom:"",dTo:"",expand:"",repFilter:[],
   gVisit:"",        // "" | "visited" | "unvisited" | "mine"  (stackable group)
   gStatus:"",       // "" | "active" | "inactive"            (stackable group)
   gHeat:[],         // subset of ["green","yellow","red"] — OR within the group
@@ -1127,6 +1153,18 @@ function rebuild(){
     const ov=store.over[i];
     if(ov)Object.assign(o,ov);
     DB.push(norm(o));
+  });
+  // Sheet rows that reference base offices this build's embedded seed doesn't
+  // have (an older/smaller seed on this device): materialize them from the
+  // override itself, so the FULL team book renders on every device regardless
+  // of which build it's running. This is what prevents a fresh install from
+  // showing a tiny office count.
+  Object.keys(store.over||{}).forEach(k=>{
+    const i=parseInt(k,10);
+    if(isNaN(i)||i<SEED.length||delSet.has(i))return;
+    const ov=store.over[k]||{};
+    if(!ov.name&&!ov.addr&&!ov.city)return;
+    DB.push(norm(Object.assign({id:"s"+i,seed:false,county:"",visited:false,active:true},ov)));
   });
   store.add.forEach(a=>DB.push(norm({...a,seed:false})));
 }
@@ -1283,22 +1321,29 @@ function groupsPass(o){
   if(state.gLab&&state.gLab.length){ const sts=labStatuses(o); if(!sts.some(s=>state.gLab.indexOf(s)>=0))return false; }
   return true;
 }
-// Secondary single-filters live in the "More" drawer (scanner/notes/custom/dates).
+// Secondary filters live in the "More" drawer (scanner/notes/added/dates).
+// They are STACKABLE: every selected chip must pass (AND). The three date chips
+// (Last 7 / Last 30 / Date range) are exclusive among themselves — picking one
+// swaps out the others — but stack freely with scanner/notes/added and the rep
+// chips, so "Rep: Ryan + Has scanner + Last 30 days" works as one query.
 function secondaryPass(o){
-  const f=state.filter;
-  if(f==="scanner"&&!(o.scanner&&o.scanner!=="None"&&o.scanner!==""))return false;
-  if(f==="notes"&&!stripLab(o.notes))return false;
-  if(f==="custom"&&(o.seed||isImport(o)))return false;
-  if(f==="d7"&&!(lastVisit(o)&&daysAgo(lastVisit(o))<=7))return false;
-  if(f==="d30"&&!(lastVisit(o)&&daysAgo(lastVisit(o))<=30))return false;
-  if(f==="drange"){ const lv=lastVisit(o); if(!lv)return false;
-    if(state.dFrom&&lv<state.dFrom)return false; if(state.dTo&&lv>state.dTo)return false; }
+  const fs=Array.isArray(state.filter)?state.filter:[];
+  for(const f of fs){
+    if(f==="scanner"&&!(o.scanner&&o.scanner!=="None"&&o.scanner!==""))return false;
+    if(f==="notes"&&!stripLab(o.notes))return false;
+    if(f==="custom"&&(o.seed||isImport(o)))return false;
+    if(f==="d7"&&!(lastVisit(o)&&daysAgo(lastVisit(o))<=7))return false;
+    if(f==="d30"&&!(lastVisit(o)&&daysAgo(lastVisit(o))<=30))return false;
+    if(f==="drange"){ const lv=lastVisit(o); if(!lv)return false;
+      if(state.dFrom&&lv<state.dFrom)return false; if(state.dTo&&lv>state.dTo)return false; }
+  }
   return true;
 }
 function repPass(o){
-  if(!state.repFilter)return true;
-  const rn=state.repFilter.replace(/\s+/g," ").toLowerCase().trim();
-  return !!(o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===rn));
+  const rf=Array.isArray(state.repFilter)?state.repFilter:[];
+  if(!rf.length)return true;
+  const names=rf.map(n=>String(n).replace(/\s+/g," ").toLowerCase().trim());
+  return !!(o.visits&&o.visits.some(v=>names.indexOf(String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim())>=0));
 }
 // Location-based territory gate with a border cushion. A non-admin rep sees offices
 // in the state they're physically in (from GPS), PLUS any office within BORDER_MILES
@@ -1422,7 +1467,7 @@ function renderInner(){
   ['active','new','winback','falloff','inactive'].forEach(k=>{ const el=document.getElementById('lc_'+k); if(el) el.textContent=lc[k].toLocaleString(); });
 
   // "Clear all" visible only when something is active
-  const anyActive=!!(state.gVisit||state.gStatus||state.gHeat.length||state.gLab.length||(state.filter&&state.filter!=="all")||state.repFilter||state.q);
+  const anyActive=!!(state.gVisit||state.gStatus||state.gHeat.length||state.gLab.length||state.filter.length||state.repFilter.length||state.q);
   const clrWrap=document.querySelector('.clearwrap'); if(clrWrap) clrWrap.classList.toggle('show',anyActive);
   const moreBtn=document.getElementById('moreBtn'); if(moreBtn) moreBtn.classList.toggle('open',state.showMore);
 
@@ -1436,16 +1481,16 @@ function renderInner(){
       // sync poll and the date inputs' own onchange) was destroying the open
       // native date picker mid-selection. We stamp a signature and skip rebuild
       // when nothing the drawer shows has changed.
-      const sig=[state.filter,state.dFrom,state.dTo,state.repFilter,(REPS||[]).map(r=>r.name).join("|")].join("§");
+      const sig=[state.filter.join(","),state.dFrom,state.dTo,state.repFilter.join(","),(REPS||[]).map(r=>r.name).join("|")].join("§");
       // Never rebuild while explicitly skipping (date onchange) OR while a date
       // input currently has focus / its picker is open — that would close it.
       const ae=document.activeElement;
       const dateFocused = ae && (ae.id==="dr_from" || ae.id==="dr_to");
       if(drawer._sig!==sig && !_skipDrawerRebuild && !dateFocused){
         drawer._sig=sig;
-        const on=f=>state.filter===f?' on':'';
-        const rf=String(state.repFilter||"").toLowerCase();
-        const repChips=(REPS||[]).map(r=>{ const nm=String((r&&r.name)||""); return `<button class="subchip${rf===nm.toLowerCase()?' on':''}" data-rep="${esc(nm)}">${esc(nm)}</button>`; }).join('');
+        const on=f=>state.filter.indexOf(f)>=0?' on':'';
+        const rfArr=state.repFilter.map(n=>String(n).toLowerCase());
+        const repChips=(REPS||[]).map(r=>{ const nm=String((r&&r.name)||""); return `<button class="subchip${rfArr.indexOf(nm.toLowerCase())>=0?' on':''}" data-rep="${esc(nm)}">${esc(nm)}</button>`; }).join('');
         drawer.innerHTML=`
           <button class="subchip${on('scanner')}" data-f="scanner">Has scanner</button>
           <button class="subchip${on('notes')}" data-f="notes">Has notes</button>
@@ -1454,10 +1499,20 @@ function renderInner(){
           <button class="subchip${on('d7')}" data-f="d7">Last 7 days</button>
           <button class="subchip${on('d30')}" data-f="d30">Last 30 days</button>
           <button class="subchip${on('drange')}" data-f="drange">Date range</button>
-          ${state.filter==="drange"?`<label>From</label><input type="date" id="dr_from" value="${esc(state.dFrom)}"><label>To</label><input type="date" id="dr_to" value="${esc(state.dTo)}">`:''}
-          ${REPS&&REPS.length?`<span class="moredivide"></span><span class="morelabel">Rep</span><button class="subchip${rf===""?' on':''}" data-rep="">All</button>${repChips}`:''}`;
-        drawer.querySelectorAll('[data-f]').forEach(b=>{ b.onclick=()=>{ const f=b.getAttribute('data-f'); state.filter=(state.filter===f && f!=="drange")?"all":f; render(); }; });
-        drawer.querySelectorAll('[data-rep]').forEach(b=>{ b.onclick=()=>{ state.repFilter=b.getAttribute('data-rep')||""; render(); }; });
+          ${state.filter.indexOf("drange")>=0?`<label>From</label><input type="date" id="dr_from" value="${esc(state.dFrom)}"><label>To</label><input type="date" id="dr_to" value="${esc(state.dTo)}">`:''}
+          ${REPS&&REPS.length?`<span class="moredivide"></span><span class="morelabel">Rep</span><button class="subchip${rfArr.length===0?' on':''}" data-rep="">All</button>${repChips}`:''}`;
+        drawer.querySelectorAll('[data-f]').forEach(b=>{ b.onclick=()=>{ const f=b.getAttribute('data-f');
+          const i=state.filter.indexOf(f);
+          if(i>=0){ state.filter.splice(i,1); }                       // tap again = off
+          else {
+            if(f==="d7"||f==="d30"||f==="drange") state.filter=state.filter.filter(x=>x!=="d7"&&x!=="d30"&&x!=="drange");
+            state.filter.push(f);                                     // stacks with the rest
+          }
+          render(); }; });
+        drawer.querySelectorAll('[data-rep]').forEach(b=>{ b.onclick=()=>{ const nm=b.getAttribute('data-rep')||"";
+          if(!nm){ state.repFilter=[]; }                              // "All" clears
+          else { const i=state.repFilter.indexOf(nm); if(i>=0) state.repFilter.splice(i,1); else state.repFilter.push(nm); }
+          render(); }; });
         // Date inputs: update state and RE-FILTER the list, but DON'T call render()
         // (which would rebuild the drawer and close the picker). We refresh only
         // the list/map directly and refresh the drawer signature in place.
@@ -1469,7 +1524,7 @@ function renderInner(){
   const filtered=DB.filter(matchFilter);
   // stats — show THAT rep's numbers when a rep is selected (repFilter) OR when this
   // device is a non-admin rep (so on launch a rep sees their own stats, not team totals).
-  let rf0=String(state.repFilter||"").replace(/\s+/g," ").toLowerCase().trim();
+  let rf0=state.repFilter.length===1?String(state.repFilter[0]).replace(/\s+/g," ").toLowerCase().trim():"";
   if(!rf0 && ME && !(isAdmin&&isAdmin())){ rf0=String(ME.name||"").replace(/\s+/g," ").toLowerCase().trim(); }
   const visitedByRep=(o)=>!!(o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===rf0));
   const addedByRep=(o)=>String(o.addedBy||"").replace(/\s+/g," ").toLowerCase().trim()===rf0;
@@ -1485,7 +1540,7 @@ function renderInner(){
   //               clients, future bulk dumps) are explicitly excluded.
   const scoped=DB.filter(territoryPass);
   if(rf0){
-    repName=(REPS||[]).map(r=>r.name).find(n=>String(n).replace(/\s+/g," ").toLowerCase().trim()===rf0)||state.repFilter;
+    repName=(REPS||[]).map(r=>r.name).find(n=>String(n).replace(/\s+/g," ").toLowerCase().trim()===rf0)||state.repFilter[0]||"";
     tot=scoped.length;
     vis=scoped.filter(isVisited).length;
     personal=scoped.filter(visitedByRep).length;
@@ -1497,7 +1552,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v44";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v45";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1517,7 +1572,7 @@ function renderInner(){
   filtered.forEach(o=>{const c=(o.city||"Uncategorized");(cities[c]=cities[c]||[]).push(o);});
   const names=Object.keys(cities).sort((a,b)=>cities[b].length-cities[a].length||a.localeCompare(b));
   // auto-open when searching/filtering narrows things
-  const forceOpen=(state.q||state.filter!=="all")&&filtered.length<120;
+  const forceOpen=(state.q||state.filter.length)&&filtered.length<120;
 
   let html="";
   names.forEach(city=>{
@@ -2974,6 +3029,7 @@ function setSyncBadge(){
   const dot=document.getElementById('syncDot'), lbl=document.getElementById('syncLabel');
   if(!dot||!lbl) return;
   if(cloudOn){
+    if(lastSyncErr){ dot.classList.remove('on'); lbl.textContent="Team sync: ⚠️ "+lastSyncErr; return; }
     dot.classList.add('on');
     let ago="";
     if(lastSyncAt){
@@ -3479,8 +3535,8 @@ function wire(){
     if(e.target.closest('#moreBtn')){ state.showMore=!state.showMore; render(); return; }
     // Clear all
     if(e.target.closest('#clearBtn')){
-      state.gVisit=""; state.gStatus=""; state.gHeat=[]; state.gLab=[]; state.filter="all";
-      state.repFilter=""; state.dFrom=""; state.dTo=""; render(); return;
+      state.gVisit=""; state.gStatus=""; state.gHeat=[]; state.gLab=[]; state.filter=[];
+      state.repFilter=[]; state.dFrom=""; state.dTo=""; render(); return;
     }
   });
   // autosave safety on hide/blur
