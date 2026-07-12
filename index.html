@@ -1171,6 +1171,13 @@ function rebuild(){
     DB.push(norm(Object.assign({id:"s"+i,seed:false,county:"",visited:false,active:true},ov)));
   });
   store.add.forEach(a=>DB.push(norm({...a,seed:false})));
+  // Recompute the team's home state — the modal state of the whole book.
+  try{
+    const tally={};
+    DB.forEach(o=>{ const st=normStateName(o.state); if(st) tally[st]=(tally[st]||0)+1; });
+    let best="",n=0; Object.keys(tally).forEach(k=>{ if(tally[k]>n){ n=tally[k]; best=k; } });
+    HOME_STATE=best;
+  }catch(e){}
 }
 
 /* ---------- helpers ---------- */
@@ -1362,12 +1369,15 @@ const BORDER_MILES=30;
 // nothing else. Rep selection, visited chips, search, and date filters never
 // change these numbers, so every rep in the same state sees the same five
 // totals, matching the Lab Dashboard's Bridge tab for that state.
+let HOME_STATE="";   // the state where most of the book lives (set in rebuild)
 function labDialPass(o){
   const os=normStateName(o.state);
   const terr=territoryStates();
   if(terr.length) return !!os && terr.indexOf(os)>=0;
-  const st=normStateName(currentGeoState);
-  if(!st) return true;              // no territory and no GPS fix yet -> whole book
+  // No territory: GPS state, else the team's home state — so the Lab dials and
+  // Lab filters are ALWAYS state-scoped, even on a desktop with location blocked.
+  const st=normStateName(currentGeoState)||HOME_STATE;
+  if(!st) return true;
   return os===st;
 }
 function territoryPass(o){
@@ -1388,8 +1398,8 @@ function territoryPass(o){
   if(userPos && o.lat && o.lng){
     if(haversine(userPos.lat,userPos.lng,+o.lat,+o.lng)<=BORDER_MILES) return true;
   }
-  const activeState=normStateName(currentGeoState);
-  if(!activeState)return true;                 // no location yet -> see all
+  const activeState=normStateName(currentGeoState)||HOME_STATE;
+  if(!activeState)return true;                 // no location and no book yet -> see all
   const os=normStateName(o.state);
   if(!os)return false;
   return os===activeState;
@@ -1565,7 +1575,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v46";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v47";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
