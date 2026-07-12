@@ -1377,6 +1377,9 @@ let HOME_STATE="";   // the state where most of the book lives (set in rebuild)
 function labScope(){
   const terr=territoryStates();
   if(terr.length) return { states:terr, src:'territory' };
+  // Admins with no territory see the NATIONAL dials — the exact numbers the
+  // Lab Dashboard's bridge tab shows. Reps stay scoped to their state.
+  if(isAdmin&&isAdmin()) return { states:[], src:'admin' };
   const gps=normStateName(currentGeoState);
   if(gps) return { states:[gps], src:'GPS' };
   if(HOME_STATE) return { states:[HOME_STATE], src:'home state' };
@@ -1494,7 +1497,7 @@ function renderInner(){
   if(lsn){ const sc=labScope();
     lsn.textContent = sc.states.length
       ? sc.states.map(x=>x.replace(/\b\w/g,c=>c.toUpperCase())).join('+') + ' · ' + sc.src
-      : '⚠ ALL STATES — set a territory';
+      : (labScope().src==='admin' ? 'All states · admin (matches dashboard)' : '⚠ ALL STATES — set a territory');
     lsn.style.color = sc.states.length ? '#8a9a92' : '#c0392b';
   }
 
@@ -1590,7 +1593,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v48";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v49";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
