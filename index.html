@@ -1322,7 +1322,10 @@ function groupsPass(o){
   if(state.gStatus==="active"&&o.active===false)return false;
   if(state.gStatus==="inactive"&&o.active!==false)return false;
   if(state.gHeat&&state.gHeat.length){ if(state.gHeat.indexOf(lastColor(o))<0)return false; }
-  if(state.gLab&&state.gLab.length){ const sts=labStatuses(o); if(!sts.some(s=>state.gLab.indexOf(s)>=0))return false; }
+  if(state.gLab&&state.gLab.length){
+    if(!labDialPass(o))return false;   // state first — Lab filters never widen to the whole book
+    const sts=labStatuses(o); if(!sts.some(s=>state.gLab.indexOf(s)>=0))return false;
+  }
   return true;
 }
 // Secondary filters live in the "More" drawer (scanner/notes/added/dates).
@@ -1543,7 +1546,11 @@ function renderInner(){
   //   X's Visits— only offices THIS rep has personally visited (starts at 0).
   //   Added     — offices this rep pin-dropped or added themselves. Imports
   //               (bridge clients, bulk uploads) never count.
-  const scoped=(isAdmin&&isAdmin())?DB.slice():DB.filter(labDialPass);
+  // State-scoped for EVERYONE — admin included — so Ryan, Jason, and any new
+  // rep working the same state all see identical Offices/Visited totals, and
+  // they match the Lab Dashboard's numbers for that state. (The office LIST
+  // still shows admins everything; only these totals are state-first.)
+  const scoped=DB.filter(labDialPass);
   const touched=o=>!!((o.visits&&o.visits.length)||o.visited||labStatuses(o).length);
   if(rf0){
     repName=(REPS||[]).map(r=>r.name).find(n=>String(n).replace(/\s+/g," ").toLowerCase().trim()===rf0)||state.repFilter[0]||"";
