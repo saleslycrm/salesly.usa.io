@@ -504,6 +504,7 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
   </div>
   <div class="exppanel" id="exp_lab" style="display:none;">
     <div class="labset" id="seg_lab">
+      <span id="labScopeNote" style="font-size:10px;color:#8a9a92;align-self:center;margin-right:6px;white-space:nowrap"></span>
       <button class="labseg" data-gl="active"><span class="ld" style="background:#5fbe7d"></span>Active <b id="lc_active">0</b></button>
       <button class="labseg" data-gl="new"><span class="ld" style="background:#12a5a0"></span>New <b id="lc_new">0</b></button>
       <button class="labseg" data-gl="winback"><span class="ld" style="background:#8e5bd1"></span>Winback <b id="lc_winback">0</b></button>
@@ -1370,15 +1371,22 @@ const BORDER_MILES=30;
 // change these numbers, so every rep in the same state sees the same five
 // totals, matching the Lab Dashboard's Bridge tab for that state.
 let HOME_STATE="";   // the state where most of the book lives (set in rebuild)
-function labDialPass(o){
-  const os=normStateName(o.state);
+// Resolve the Lab scope once: territory → GPS state → home state. Returns the
+// state(s) plus WHERE they came from, so the UI can show it and misconfig is
+// visible at a glance instead of silently widening to the whole book.
+function labScope(){
   const terr=territoryStates();
-  if(terr.length) return !!os && terr.indexOf(os)>=0;
-  // No territory: GPS state, else the team's home state — so the Lab dials and
-  // Lab filters are ALWAYS state-scoped, even on a desktop with location blocked.
-  const st=normStateName(currentGeoState)||HOME_STATE;
-  if(!st) return true;
-  return os===st;
+  if(terr.length) return { states:terr, src:'territory' };
+  const gps=normStateName(currentGeoState);
+  if(gps) return { states:[gps], src:'GPS' };
+  if(HOME_STATE) return { states:[HOME_STATE], src:'home state' };
+  return { states:[], src:'unscoped' };
+}
+function labDialPass(o){
+  const sc=labScope();
+  if(!sc.states.length) return true;
+  const os=normStateName(o.state);
+  return !!os && sc.states.indexOf(os)>=0;
 }
 function territoryPass(o){
   if(isAdmin&&isAdmin())return true;
@@ -1482,6 +1490,13 @@ function renderInner(){
   const lc={active:0,"new":0,winback:0,falloff:0,inactive:0};
   labBase.forEach(o=>{ labStatuses(o).forEach(st=>{ if(st in lc) lc[st]++; }); });
   ['active','new','winback','falloff','inactive'].forEach(k=>{ const el=document.getElementById('lc_'+k); if(el) el.textContent=lc[k].toLocaleString(); });
+  const lsn=document.getElementById('labScopeNote');
+  if(lsn){ const sc=labScope();
+    lsn.textContent = sc.states.length
+      ? sc.states.map(x=>x.replace(/\b\w/g,c=>c.toUpperCase())).join('+') + ' · ' + sc.src
+      : '⚠ ALL STATES — set a territory';
+    lsn.style.color = sc.states.length ? '#8a9a92' : '#c0392b';
+  }
 
   // "Clear all" visible only when something is active
   const anyActive=!!(state.gVisit||state.gStatus||state.gHeat.length||state.gLab.length||state.filter.length||state.repFilter.length||state.q);
@@ -1575,7 +1590,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v47";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v48";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
