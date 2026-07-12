@@ -1596,7 +1596,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v49";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v50";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -2573,12 +2573,33 @@ function renderCalDayDetail(items, ds){
   host.innerHTML=`<div class="cal-dd-head">${esc(fmtDate(ds))} · ${items.length} visit${items.length===1?'':'s'}</div>${rows}`;
   host.querySelectorAll('[data-oid]').forEach(b=>{ b.onclick=()=>openDetail(b.getAttribute('data-oid')); });
 }
+// Full street query for map links. Always includes the house number + street so
+// Apple/Google label the pin with the real address instead of reverse-geocoding
+// the coordinate (which can drop the house number and show just the street).
+function mapQuery(o){
+  const st=(o.state&&String(o.state).length>2)?stateAbbr2(o.state):(o.state||'IL');
+  return [o.name,o.addr,o.city,st,o.zip].map(x=>String(x||'').trim()).filter(Boolean).join(', ');
+}
+function stateAbbr2(name){
+  const M={illinois:'IL',indiana:'IN',iowa:'IA',wisconsin:'WI',michigan:'MI',missouri:'MO',minnesota:'MN',kentucky:'KY',ohio:'OH'};
+  return M[String(name||'').toLowerCase()]||'IL';
+}
 function mapEmbed(o){
   if(o.lat&&o.lng) return `https://maps.google.com/maps?q=${o.lat},${o.lng}&z=16&output=embed`;
   return `https://maps.google.com/maps?q=${encodeURIComponent(o.name+' '+o.addr+' '+o.city+' IL '+o.zip)}&z=15&output=embed`;
 }
-function mapAppleLink(o){ return o.lat&&o.lng?`https://maps.apple.com/?q=${encodeURIComponent(o.name)}&ll=${o.lat},${o.lng}`:`https://maps.apple.com/?q=${encodeURIComponent(o.name+' '+o.addr+' '+o.city+' IL')}`; }
-function mapGLink(o){ return o.lat&&o.lng?`https://www.google.com/maps/search/?api=1&query=${o.lat},${o.lng}`:`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(o.name+' '+o.addr+' '+o.city+' IL '+o.zip)}`; }
+function mapAppleLink(o){
+  const addr=[o.addr,o.city,(o.state&&String(o.state).length>2)?stateAbbr2(o.state):(o.state||'IL'),o.zip].map(x=>String(x||'').trim()).filter(Boolean).join(', ');
+  // address= carries the full street (house number kept); ll= just positions the map.
+  if(o.addr&&o.lat&&o.lng) return `https://maps.apple.com/?address=${encodeURIComponent(addr)}&ll=${o.lat},${o.lng}&q=${encodeURIComponent(o.name)}`;
+  if(o.lat&&o.lng) return `https://maps.apple.com/?q=${encodeURIComponent(o.name)}&ll=${o.lat},${o.lng}`;
+  return `https://maps.apple.com/?q=${encodeURIComponent(mapQuery(o))}`;
+}
+function mapGLink(o){
+  if(o.addr) return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery(o))}`;
+  if(o.lat&&o.lng) return `https://www.google.com/maps/search/?api=1&query=${o.lat},${o.lng}`;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery(o))}`;
+}
 
 function openDetail(id){
   const o=officeById(id); if(!o)return;
