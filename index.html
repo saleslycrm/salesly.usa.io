@@ -504,6 +504,7 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
   </div>
   <div class="exppanel" id="exp_lab" style="display:none;">
     <div class="labset" id="seg_lab">
+      <select id="labStateSel" style="font-size:11px;padding:4px 6px;border-radius:8px;border:1.5px solid var(--line-strong);background:var(--surface);color:var(--ink);max-width:150px;"></select>
       <span id="labScopeNote" style="font-size:10px;color:#8a9a92;align-self:center;margin-right:6px;white-space:nowrap"></span>
       <button class="labseg" data-gl="active"><span class="ld" style="background:#5fbe7d"></span>Active <b id="lc_active">0</b></button>
       <button class="labseg" data-gl="new"><span class="ld" style="background:#12a5a0"></span>New <b id="lc_new">0</b></button>
@@ -1374,12 +1375,16 @@ let HOME_STATE="";   // the state where most of the book lives (set in rebuild)
 // Resolve the Lab scope once: territory → GPS state → home state. Returns the
 // state(s) plus WHERE they came from, so the UI can show it and misconfig is
 // visible at a glance instead of silently widening to the whole book.
+/* The Lab panel's scope is EXPLICIT: a dropdown in the panel controls it.
+   Auto = your territory (reps) or the state you're standing in (admin).
+   "All states" = national — the number that matches the dashboard's Total row. */
+let LAB_STATE_SEL="";
+try{ LAB_STATE_SEL=localStorage.getItem("labStateSel")||""; }catch(e){}
 function labScope(){
+  if(LAB_STATE_SEL==="__ALL__") return { states:[], src:'all states (manual)' };
+  if(LAB_STATE_SEL) return { states:[normStateName(LAB_STATE_SEL)], src:'selected' };
   const terr=territoryStates();
   if(terr.length) return { states:terr, src:'territory' };
-  // Admins with no territory see the NATIONAL dials — the exact numbers the
-  // Lab Dashboard's bridge tab shows. Reps stay scoped to their state.
-  if(isAdmin&&isAdmin()) return { states:[], src:'admin' };
   const gps=normStateName(currentGeoState);
   if(gps) return { states:[gps], src:'GPS' };
   if(HOME_STATE) return { states:[HOME_STATE], src:'home state' };
@@ -1493,12 +1498,23 @@ function renderInner(){
   const lc={active:0,"new":0,winback:0,falloff:0,inactive:0};
   labBase.forEach(o=>{ labStatuses(o).forEach(st=>{ if(st in lc) lc[st]++; }); });
   ['active','new','winback','falloff','inactive'].forEach(k=>{ const el=document.getElementById('lc_'+k); if(el) el.textContent=lc[k].toLocaleString(); });
+  const lss=document.getElementById('labStateSel');
+  if(lss){
+    const have={}; DB.forEach(o=>{ if(labStatuses(o).length){ const st=normStateName(o.state); if(st)have[st]=1; } });
+    const states=Object.keys(have).sort();
+    const cap=x=>x.replace(/\b\w/g,c=>c.toUpperCase());
+    const wanted='<option value="">Auto (my state)</option><option value="__ALL__">All states (dashboard total)</option>'+
+      states.map(st=>'<option value="'+esc(st)+'">'+esc(cap(st))+'</option>').join('');
+    if(lss.dataset.built!==wanted){ lss.innerHTML=wanted; lss.dataset.built=wanted; }
+    lss.value=LAB_STATE_SEL;
+    lss.onchange=()=>{ LAB_STATE_SEL=lss.value; try{localStorage.setItem("labStateSel",LAB_STATE_SEL);}catch(e){} render(); };
+  }
   const lsn=document.getElementById('labScopeNote');
   if(lsn){ const sc=labScope();
     lsn.textContent = sc.states.length
       ? sc.states.map(x=>x.replace(/\b\w/g,c=>c.toUpperCase())).join('+') + ' · ' + sc.src
-      : (labScope().src==='admin' ? 'All states · admin (matches dashboard)' : '⚠ ALL STATES — set a territory');
-    lsn.style.color = sc.states.length ? '#8a9a92' : '#c0392b';
+      : (sc.src.indexOf('manual')>=0 ? 'All states — matches the dashboard Total row' : '⚠ ALL STATES — set a territory');
+    lsn.style.color = '#8a9a92';
   }
 
   // "Clear all" visible only when something is active
@@ -1593,7 +1609,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v49";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v50";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
