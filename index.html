@@ -136,6 +136,16 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:calc
 .cityrow.open .officelist{display:block;}
 
 .office{padding:13px 16px 13px 22px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;}
+.pracgrp{border-top:1px solid var(--line);}
+.prachdr{display:flex;align-items:center;gap:9px;padding:12px 16px 12px 22px;width:100%;text-align:left;background:none;border:none;cursor:pointer;}
+.prachdr:active{background:var(--surface-2);}
+.prachdr .chev2{flex:none;transition:transform .18s;color:var(--ink-soft);}
+.pracgrp.open .prachdr .chev2{transform:rotate(90deg);}
+.prachdr .pracnm{font-weight:600;font-size:14px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.prachdr .praccnt{font-size:12px;font-weight:700;color:#fff;background:var(--brand,#0f766e);border-radius:999px;padding:1px 9px;}
+.pracsub{display:none;}
+.pracgrp.open .pracsub{display:block;}
+.pracsub .office{padding-left:40px;background:var(--surface-2);}
 .office:active{background:#f0ece2;}
 .office .onm{flex:1;min-width:0;}
 .office .otitle{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -1006,6 +1016,7 @@ function cloudSaveConfig(url, token){
   try{localStorage.setItem(GS_CFG_KEY,JSON.stringify({url:GS_URL,token:GS_TOKEN}));}catch(e){}
 }
 
+let PRAC_OPEN=new Set();
 let SEED=[], DB=[], state={tab:"city",filter:[],q:"",openCity:null,view:"list",dFrom:"",dTo:"",expand:"",repFilter:[],
   gVisit:"",        // "" | "visited" | "unvisited" | "mine"  (stackable group)
   gStatus:"",       // "" | "active" | "inactive"            (stackable group)
@@ -1596,7 +1607,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v50";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v51";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1611,6 +1622,9 @@ function renderInner(){
     return;
   }
 
+  // Normalize a practice name for grouping (case/space/punct-insensitive).
+  // Defined inline so it's available even before other helpers load.
+  window.sbNormName=window.sbNormName||function(n){return String(n||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();};
   // group by city (null-safe: synced/added offices may have blank fields)
   const cities={};
   filtered.forEach(o=>{const c=(o.city||"Uncategorized");(cities[c]=cities[c]||[]).push(o);});
@@ -1629,9 +1643,10 @@ function renderInner(){
         <span class="citycount">${list.length}</span>
       </button>
       <div class="officelist">`;
-    list.forEach(o=>{
+    // Roll up multiple locations that share a practice name into one group.
+    const officeHTML=o=>{
       const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!=="";
-      html+=`<button class="office" data-open="${o.id}">
+      return `<button class="office" data-open="${o.id}">
         <div class="badges">
           <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
         </div>
@@ -1639,6 +1654,25 @@ function renderInner(){
         ${labChip(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
         ${stripLab(o.notes)?'<span class="dot note"></span>':''}
       </button>`;
+    };
+    // bucket by normalized name, preserving first-seen order
+    const groups=new Map();
+    list.forEach(o=>{ const k=sbNormName(o.name); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(o); });
+    groups.forEach(offs=>{
+      if(offs.length===1){ html+=officeHTML(offs[0]); return; }
+      // multi-location practice → collapsible sub-group
+      const gkey=city+'|'+sbNormName(offs[0].name);
+      const gopen=forceOpen||PRAC_OPEN.has(gkey);
+      const anyVisited=offs.some(isVisited);
+      html+=`<div class="pracgrp${gopen?' open':''}" data-pracgrp="${esc(gkey)}">
+        <button class="prachdr" data-prachdr="${esc(gkey)}">
+          <svg class="chev2" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
+          <span class="dot ${anyVisited?'visited':''}" style="${anyVisited?'':'background:var(--line-strong)'};flex:none"></span>
+          <span class="pracnm">${esc(offs[0].name)}</span>
+          <span class="praccnt">${offs.length}</span>
+        </button>
+        <div class="pracsub">${offs.map(officeHTML).join('')}</div>
+      </div>`;
     });
     html+=`</div></div>`;
   });
@@ -3540,6 +3574,11 @@ function wire(){
       if(row.classList.contains('open')&&state.openCity!==c){row.classList.remove('open');}
       else if(state.openCity===c){document.querySelectorAll('.cityrow.open').forEach(r=>{if(r!==row)r.classList.remove('open');});row.classList.add('open');}
       else{row.classList.toggle('open');}
+      return;}
+    const ph=e.target.closest('[data-prachdr]');
+    if(ph){const key=ph.getAttribute('data-prachdr');const grp=ph.closest('.pracgrp');
+      if(PRAC_OPEN.has(key)){PRAC_OPEN.delete(key);grp.classList.remove('open');}
+      else{PRAC_OPEN.add(key);grp.classList.add('open');}
       return;}
     const op=e.target.closest('[data-open]');
     if(op){openDetail(op.getAttribute('data-open'));return;}
