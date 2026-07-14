@@ -1607,7 +1607,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v51";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v52";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1959,9 +1959,25 @@ function makeMarker(o){
   // Render the popup from the CURRENT office (by id) at open time, not the snapshot
   // captured here — otherwise edits made after the marker was built (e.g. ticking an
   // onboarding box) wouldn't show when the popup reopens.
-  m.bindPopup(()=>popupHTML(officeById(o.id)||o),{minWidth:230,maxWidth:260});
+  m.bindPopup(()=>popupHTML(officeById(o.id)||o),{
+    minWidth:230, maxWidth:260,
+    autoPan:true, keepInView:true, autoPanPadding:L.point(24,90)
+  });
+  // Center the map on the marker when its popup opens, so the card sits in the
+  // middle of the screen instead of wherever the pin happened to be.
+  m.on('popupopen', function(){ try{ centerOnMarker(m); }catch(e){} });
   m._oid=o.id;
   return m;
+}
+// Pan (not zoom) so the marker — and therefore its popup — is centered in the
+// visible map area, accounting for the popup opening upward from the pin.
+function centerOnMarker(m){
+  if(!mapObj||!m) return;
+  var ll=m.getLatLng();
+  var pt=mapObj.latLngToContainerPoint(ll);
+  // nudge the target point down a touch so the upward-opening popup is centered
+  var target=mapObj.containerPointToLatLng(L.point(pt.x, pt.y));
+  mapObj.panTo(target, {animate:true, duration:0.25});
 }
 // On-map route overlay removed by request: the planned route is shown in the
 // route panel list and handed to Apple Maps for navigation. These remain as
@@ -2092,7 +2108,9 @@ function _drawRouteBase(coordsLatLng, ordered){
     const first=(i===0);
     const icon=L.divIcon({className:'',html:`<div class="routepin${first?' first':''}">${i+1}</div>`,iconSize:first?[32,32]:[26,26],iconAnchor:first?[16,16]:[13,13],popupAnchor:[0,-14]});
     const m=L.marker([+o.lat,+o.lng],{icon,zIndexOffset:first?2000:1500});
-    m.bindPopup(()=>popupHTML(o),{minWidth:230,maxWidth:260}); m._oid=o.id; m.addTo(routeLayer);
+    m.bindPopup(()=>popupHTML(o),{minWidth:230,maxWidth:260,autoPan:true,keepInView:true,autoPanPadding:L.point(24,90)});
+    m.on('popupopen', function(){ try{ centerOnMarker(m); }catch(e){} });
+    m._oid=o.id; m.addTo(routeLayer);
   });
   routeLayer.addTo(mapObj);
   const cb=document.getElementById('clearRoute'); if(cb) cb.style.display='block';
@@ -2483,6 +2501,13 @@ function setView(v){
   const cb=document.getElementById('btnCal'); if(cb) cb.classList.toggle('on', v==="calendar");
   if(v==="calendar"){ renderCalendar(); }
   else { render(); }
+  // Map needs its size recomputed once its container is actually visible, or it
+  // renders against a stale/zero size — the cause of the layout shifting down and
+  // the follow button landing in the wrong place until a manual refresh.
+  if(v==="map" && mapObj){
+    setTimeout(()=>{ try{ mapObj.invalidateSize(false); }catch(e){} }, 60);
+    setTimeout(()=>{ try{ mapObj.invalidateSize(false); }catch(e){} }, 220);
+  }
   // Returning to the map resumes following where you are now (if you were before).
   if(v==="map" && _wasFollowing && !followMode){
     setTimeout(()=>{ try{ if(state.view==="map" && !followMode) startFollow(); }catch(e){} }, 200);
@@ -3560,7 +3585,15 @@ function openManageReps(){
   showSheet();
 }
 
-function showSheet(){document.body.classList.add('sheet-open');document.getElementById('sheetBg').classList.add('show');document.getElementById('sheet').classList.add('show');}
+function showSheet(){
+  document.body.classList.add('sheet-open');
+  document.getElementById('sheetBg').classList.add('show');
+  document.getElementById('sheet').classList.add('show');
+  // Always start at the top of the sheet content so the note field, practice
+  // name, and onboarding boxes are in view without scrolling.
+  var body=document.getElementById('sheetBody');
+  if(body){ setTimeout(function(){ try{ body.scrollTop=0; }catch(e){} }, 0); }
+}
 function hideSheet(){document.body.classList.remove('sheet-open');document.getElementById('sheetBg').classList.remove('show');document.getElementById('sheet').classList.remove('show');if(state.view==="map"&&mapObj){requestAnimationFrame(()=>{try{mapObj.invalidateSize(false);}catch(e){}});}}
 
 /* ---------- events ---------- */
