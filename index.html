@@ -720,7 +720,7 @@ let sb=null, cloudOn=false, pulling=false, pushing=false;
 let lastSyncAt=0, lastSyncErr="", lastRawRows=0, lastSyncJSON="";
 let pollTimer=null, watchdog=null, sbChannel=null;
 const DIRTY=new Set();            // office ids edited locally, not yet pushed
-const VIEWPORT_LIMIT=600;         // hard cap on A/B pins per pan — keeps Leaflet alive
+const VIEWPORT_LIMIT=4000;        // A/B pins per pan. Clustering handles this fine; dense metros (Chicago ~3,800 prospects) now load fully instead of stopping at a few hundred.
 let _lastBox="";                  // dedupe identical viewport queries
 
 function cloudInit(){
@@ -3061,7 +3061,7 @@ function openSync(){
         <li>Copy the <b>anon public</b> key into the second field, then <b>Save &amp; connect</b>.</li>
       </ol>
       <div style="font-size:11.5px;color:var(--ink-soft);margin-top:6px;line-height:1.5;">
-        <b>What the map loads:</b> every <b>S-tier</b> office (your invoiced customers) is always shown, at any zoom. <b>A/B-tier</b> prospects are fetched only for the area you're currently looking at, capped at ${VIEWPORT_LIMIT} pins — which is why the map stays fast with 100k+ locations in the database. Pan or zoom to load a different area.
+        <b>What the map loads:</b> every <b>S-tier</b> office (your invoiced customers) is always shown, at any zoom. <b>A/B-tier</b> prospects are fetched only for the area you're currently looking at, capped at ${VIEWPORT_LIMIT} prospects per view — which is why the map stays fast with 100k+ locations in the database. Pan or zoom to load a different area.
       </div>
       <div style="font-size:11.5px;color:var(--amber);margin-top:8px;">Visits write to the append-only <b>visit_log</b> table. Nothing in the app can delete a logged visit — deleting an office just marks it inactive.</div>
     </details>`;
