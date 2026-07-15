@@ -722,6 +722,7 @@ let pollTimer=null, watchdog=null, sbChannel=null;
 const DIRTY=new Set();            // office ids edited locally, not yet pushed
 const VIEWPORT_LIMIT=4000;        // A/B pins per pan. Clustering handles this fine; dense metros (Chicago ~3,800 prospects) now load fully instead of stopping at a few hundred.
 let _lastBox="";                  // dedupe identical viewport queries
+let _didInitialFit=false;         // fit the map to the user ONCE on first load, then never yank them back
 
 function cloudInit(){
   cloudOn=false; sb=null; lastSyncErr="";
@@ -2133,12 +2134,12 @@ function refreshMap(filtered){
   if(nearbyMode && userPos && pts.length){
     const b=L.latLngBounds(pts.map(o=>[o.lat,o.lng])); b.extend([userPos.lat,userPos.lng]);
     try{ mapObj.fitBounds(b.pad(0.12),{maxZoom:15}); }catch(e){}
-  } else if(pts.length){
-    // Default (not-following) view priority:
-    //   1. a ~5-mile window around the user's position (their working area)
-    //   2. the pins in their state (GPS state, else assigned territory)
-    //   3. otherwise leave the map where it is — never yank out to a
-    //      whole-country fit now that offices exist in many states.
+  } else if(pts.length && !_didInitialFit){
+    // FIRST render only: frame the user's working area. After that we NEVER
+    // recenter on render — otherwise zooming out (which triggers a reload +
+    // re-render) would keep snapping the map back to the user. The rep drives
+    // the view from here; the crosshair button is how they opt back into follow.
+    _didInitialFit=true;
     if(userPos){
       try{ mapObj.fitBounds(L.latLng(userPos.lat,userPos.lng).toBounds(8047)); }catch(e){}
     } else {
