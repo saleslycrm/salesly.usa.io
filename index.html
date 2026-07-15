@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -9,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly</title>
+<title>Salesly v53</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1477,7 +1480,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v52";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v53";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -3360,10 +3363,21 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
   } else {
     const user = await sbSession();
     if(!user){ showLogin(); setSyncBadge(); return; }
-    try{ await cloudPull(); }catch(e){}
+    // Actually pull. If it fails, DON'T swallow it silently (that's what left the
+    // app showing 0/0/0/0 with no clue). Surface the reason and, if the session
+    // is the problem, bounce back to the login screen so a fresh sign-in fixes it.
+    let pulled=false;
+    try{ pulled=await cloudPull(); }
+    catch(e){ lastSyncErr=(e&&e.message)?e.message:String(e); }
+    if(!pulled && (lastSyncErr||"").match(/JWT|token|auth|session|expired|401|permission|row-level/i)){
+      // stale/expired session — force a clean re-login
+      try{ await sb.auth.signOut(); }catch(_){}
+      sbUser=null; showLogin("Your session expired — please sign in again."); setSyncBadge(); return;
+    }
     cloudSubscribe();
     cloudLoadReps();
     rebuild(); render();
+    if(!DB.length && lastSyncErr){ toast("Couldn't load offices: "+lastSyncErr); }
     setSyncBadge();
   }
   loadRoute(); renderRouteBar();   // restore an in-progress route after reopen/refresh
