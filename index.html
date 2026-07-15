@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v62</title>
+<title>Salesly v63</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1299,7 +1299,11 @@ function labDialPass(o){
   return !!os && sc.states.indexOf(os)>=0;
 }
 function territoryPass(o){
-  if(isAdmin&&isAdmin())return true;
+  // NOTE: admins used to bypass all scoping here (return true), which is why an
+  // admin standing in Illinois saw Houston, Denver, etc. — the whole national
+  // book. Now EVERYONE (admin included) is scoped to their territory/GPS state
+  // by default, so a rep in Illinois sees Illinois. Admins can still reach other
+  // states by searching (search bypasses the state filter) or by panning the map.
   // Recognized states from the rep's Territory field ("Illinois", "IL", or a
   // comma-separated list all work). Empty when no territory is set OR the text
   // isn't a recognizable state — both fall back to the GPS behavior below.
@@ -1323,7 +1327,9 @@ function territoryPass(o){
   return os===activeState;
 }
 function matchFilter(o){
-  if(!territoryPass(o))return false;
+  // When the user is actively searching, don't restrict to their state — let
+  // them find any office nationwide by name/city/address.
+  if(!state.q && !territoryPass(o))return false;
   if(!groupsPass(o))return false;
   if(!secondaryPass(o))return false;
   if(!repPass(o))return false;
@@ -1502,7 +1508,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v62";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v63";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
