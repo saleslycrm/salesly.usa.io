@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v59</title>
+<title>Salesly v62</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -959,6 +959,10 @@ async function sbSignOut(){
 }
 
 function showLogin(msg){
+  try{ openSync(); }catch(e){}
+  return;
+}
+function _showLogin_unused(msg){
   _loginLock=true;   // block any map/list render from painting over the form
   const m=document.getElementById('main'); if(!m) return;
   m.innerHTML=`
@@ -1498,7 +1502,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v59";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v62";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1506,7 +1510,14 @@ function renderInner(){
      <div class="stat"><div class="sv">${added}</div><div class="sl">Added</div></div>`;
 
   const main=document.getElementById('main');
-  if(state.view==="map"){ refreshMap(filtered); }
+  if(state.view==="map"){
+    // On the map view the map lives inside #main. NEVER overwrite it with an
+    // empty-state message — during a sync `filtered` can be momentarily empty,
+    // and wiping #main destroys the map, causing the flicker where it vanishes
+    // then reloads. Just (re)draw the markers and stop.
+    refreshMap(filtered);
+    return;
+  }
   if(!filtered.length){
     if(pulling){ main.innerHTML=`<div class="empty"><h3>Loading offices…</h3><p>Fetching your book from the server.</p></div>`; }
     else if(!cloudOn){ main.innerHTML=`<div class="empty"><h3>Not connected</h3><p>Open Settings ▸ Team Sync and paste your Supabase URL and anon key.</p></div>`; }
@@ -3069,11 +3080,18 @@ function openSync(){
       <input id="sy_url" type="url" placeholder="https://xxxxxxxx.supabase.co" value="${esc(SB_URL)}"></div>
     <div class="fld"><label>Anon (public) key</label>
       <input id="sy_token" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="eyJhbGciOi…" value="${esc(SB_KEY)}">
-      <div style="font-size:11px;color:var(--ink-soft);margin-top:5px;line-height:1.5;">This is the <b>anon</b> key, not the service_role key. It's safe in the app: Row Level Security decides what each rep can actually see. Never paste a service_role key here.</div></div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-top:5px;line-height:1.5;">The <b>anon / publishable</b> key — never the secret key.</div></div>
+    ${sbUser?`<div style="font-size:13px;color:var(--green);margin:10px 0;font-family:var(--mono);">● Signed in as ${esc(sbUser.email||'')}</div>`:`
+    <div style="border-top:1px solid var(--line);margin:14px 0 10px;padding-top:12px;font-size:12px;color:var(--ink);font-weight:700;">Your login</div>
+    <div class="fld"><label>Email</label>
+      <input id="sy_email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="you@vitalitydentalarts.com"></div>
+    <div class="fld"><label>Password</label>
+      <input id="sy_pw" type="password" autocomplete="current-password" placeholder="••••••••"></div>`}
     <div class="actions" style="margin-top:2px;">
       <button class="btn btn-ghost" id="sy_off">Turn off</button>
-      <button class="btn btn-primary" id="sy_save">Save &amp; connect</button>
+      <button class="btn btn-primary" id="sy_save">${sbUser?'Save &amp; sync':'Connect &amp; sign in'}</button>
     </div>
+    <div id="sy_err" style="color:var(--danger);font-size:12.5px;margin-top:9px;min-height:16px;"></div>
     ${on?`<button class="btn btn-ghost" id="sy_now" style="width:100%;margin-top:9px;">↻ Sync now</button>`:``}
     <button class="btn btn-ghost" id="sy_restore" style="width:100%;margin-top:9px;">⟳ Reload office book</button>
     ${on&&sbUser?`<button class="btn btn-ghost" id="sy_out" style="width:100%;margin-top:9px;">Sign out (${esc(sbUser.email||'')})</button>`:``}
@@ -3099,15 +3117,27 @@ function openSync(){
     const tEl=document.getElementById('sy_token'); const tok=tEl?tEl.value.trim():"";
     if(!tok){toast("Paste your anon key");return;}
     if(/service_role/i.test(tok)){toast("⚠️ That's the service_role key — use the anon key");return;}
+    const errEl=document.getElementById('sy_err'); const setErr=(m)=>{ if(errEl)errEl.textContent=m||""; };
+    setErr("");
     pulling=false; pushing=false;
     cloudSaveConfig(u, tok); cloudUnsubscribe(); await cloudInit();
-    if(!cloudOn){ toast("⚠️ "+(lastSyncErr||"couldn't connect")); return; }
-    toast("Connecting…");
-    const user=await sbSession();
-    if(!user){ hideSheet(); showLogin(); toast("Connected — now sign in"); return; }
+    if(!cloudOn){ setErr(lastSyncErr||"Couldn't connect — check the URL and key"); return; }
+
+    // If not already signed in, take the email+password right here and sign in.
+    let user=await sbSession();
+    if(!user){
+      const eEl=document.getElementById('sy_email'); const pEl=document.getElementById('sy_pw');
+      const email=eEl?eEl.value.trim():""; const pw=pEl?pEl.value:"";
+      if(!email||!pw){ setErr("Enter your email and password to sign in."); return; }
+      saveBtn.disabled=true; saveBtn.textContent="Signing in…";
+      try{ user=await sbSignIn(email,pw); }
+      catch(err){ saveBtn.disabled=false; saveBtn.textContent="Connect & sign in"; setErr(err.message||"Sign-in failed"); return; }
+    }
+    saveBtn.disabled=true; saveBtn.textContent="Loading…";
     const pulled=await cloudPull(); cloudSubscribe(); cloudLoadReps();
+    _loginLock=false;
     rebuild(); render(); setSyncBadge(); hideSheet();
-    toast(pulled?("Connected — "+DB.length.toLocaleString()+" offices loaded"):("⚠️ "+(lastSyncErr||"connected, but no data came back")));
+    toast(pulled?("Signed in — "+DB.length.toLocaleString()+" offices loaded"):("⚠️ "+(lastSyncErr||"connected, but no data came back")));
   };
   const restoreBtn=document.getElementById('sy_restore');
   if(restoreBtn) restoreBtn.onclick=async()=>{
@@ -3390,7 +3420,7 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
     // mid-load), then check the session and show the login prompt if needed.
     if(!cloudOn){ await cloudInit(); }
     const user = cloudOn ? await sbSession() : null;
-    if(!user){ showLogin(); setSyncBadge(); return; }
+    if(!user){ setSyncBadge(); openSync(); return; }   // no session -> open Team Sync (has login fields)
     // Actually pull. If it fails, DON'T swallow it silently (that's what left the
     // app showing 0/0/0/0 with no clue). Surface the reason and, if the session
     // is the problem, bounce back to the login screen so a fresh sign-in fixes it.
@@ -3470,10 +3500,38 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
 // on the first home-screen launch, which is why the login prompt only appeared
 // after a close-and-reopen. We now also actively tear down any SW + caches a
 // previous version installed, so every launch loads fresh from the network.
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{});
-  if(window.caches && caches.keys){ caches.keys().then(ks=>ks.forEach(k=>caches.delete(k))).catch(()=>{}); }
-}
+// ---- KILL THE SERVICE WORKER, PERMANENTLY, WITH AUTO-RELOAD ----
+// A stale service worker is the ONLY reason this app ever needed a delete/re-add.
+// The problem: if an old SW is already controlling the page, it serves the OLD
+// version on THIS load, and unregistering only helps the NEXT load — which is
+// exactly the "close and reopen" trap.
+//
+// The fix: if we detect the page is being controlled by a service worker, we
+// tear it down AND force ONE automatic reload to pull the fresh copy. We use a
+// sessionStorage flag so it can only reload once (no infinite loop). After this,
+// no SW controls the app ever again, so updates just work — no delete/re-add.
+(function killServiceWorker(){
+  if(!('serviceWorker' in navigator)) return;
+  // Always try to remove any registrations + caches.
+  try{
+    navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>{ try{r.unregister();}catch(_){}})).catch(()=>{});
+    if(window.caches && caches.keys){ caches.keys().then(ks=>ks.forEach(k=>{ try{caches.delete(k);}catch(_){}})).catch(()=>{}); }
+  }catch(_){}
+  // If a SW is actively controlling THIS page, it just served us a possibly-stale
+  // copy. Reload once (only once) to get the fresh network version.
+  try{
+    if(navigator.serviceWorker.controller){
+      if(!sessionStorage.getItem('_swflush')){
+        sessionStorage.setItem('_swflush','1');
+        // give the unregister a beat, then hard-reload from network
+        setTimeout(function(){ location.reload(); }, 300);
+      }
+    } else {
+      // no controller = we're clean; clear the flag for future sessions
+      try{ sessionStorage.removeItem('_swflush'); }catch(_){}
+    }
+  }catch(_){}
+})();
 </script>
 </body>
 </html>
