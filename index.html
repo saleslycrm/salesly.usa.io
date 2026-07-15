@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v56</title>
+<title>Salesly v57</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1493,7 +1493,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v56";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v57";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -3346,6 +3346,20 @@ try{ if(localStorage.getItem('hdr_collapsed')!=='0') document.body.classList.add
 // Expose popup-invoked handlers globally as a safety net.
 window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openForm;
 (async function init(){
+  // ---- FIRST-OPEN DIAGNOSTIC (temporary) ----
+  // Prints boot state to a banner so we can SEE why login does/doesn't show on a
+  // fresh home-screen launch instead of guessing. Tap it to dismiss.
+  window.__dbg=function(msg){
+    try{
+      let d=document.getElementById('__dbgbar');
+      if(!d){ d=document.createElement('div'); d.id='__dbgbar';
+        d.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#111;color:#0f0;font:11px/1.4 monospace;padding:8px 10px;max-height:40vh;overflow:auto;white-space:pre-wrap';
+        d.onclick=()=>d.remove(); document.body.appendChild(d); }
+      d.textContent += msg + "\n";
+    }catch(e){}
+  };
+  const _sw = ('serviceWorker' in navigator);
+  __dbg("BOOT v56 | standalone="+(window.navigator.standalone===true)+" | swSupported="+_sw);
   load();
   loadReps(); loadMe();           // rep registry + this device's identity
   // For non-admin reps, detect their current state from GPS once on load so the
@@ -3357,7 +3371,9 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
         ()=>{}, {enableHighAccuracy:false,timeout:12000,maximumAge:300000});
     }
   }catch(e){}
+  __dbg("before cloudInit: supabaseLib="+(!!window.supabase)+" | hasURL="+(!!SB_URL)+" | hasKey="+(!!SB_KEY));
   await cloudInit();
+  __dbg("after cloudInit: cloudOn="+cloudOn+" | err="+(lastSyncErr||"none"));
   setSyncBadge();                 // reflect saved sync state immediately
 
   // Wire up all buttons/handlers IMMEDIATELY, before any network work, so the UI
@@ -3375,16 +3391,20 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
   //      was being missed on a fresh home-screen open: cloudOn hadn't flipped
   //      true yet, so we fell into "Not connected" and never showed login)
   //   3. Keys + session -> load offices
+  __dbg("branch check: SB_URL="+(!!SB_URL)+" SB_KEY="+(!!SB_KEY)+" cloudOn="+cloudOn);
   if(!SB_URL || !SB_KEY){
+    __dbg("-> NOT CONNECTED branch (no keys)");
     const m=document.getElementById('main');
     if(m && !DB.length){ m.innerHTML='<div class="empty"><h3>Not connected</h3><p>Open Settings ▸ Team Sync and paste your Supabase URL and anon key.</p></div>'; }
     setSyncBadge();
   } else {
     // Keys exist. Make sure the client is actually up (retry once if the lib was
     // mid-load), then check the session and show the login prompt if needed.
-    if(!cloudOn){ await cloudInit(); }
+    if(!cloudOn){ __dbg("cloudOn was false, retrying cloudInit"); await cloudInit(); }
     const user = cloudOn ? await sbSession() : null;
-    if(!user){ showLogin(); setSyncBadge(); return; }
+    __dbg("session check: cloudOn="+cloudOn+" user="+(user?user.email:"NONE"));
+    if(!user){ __dbg("-> showLogin()"); showLogin(); setSyncBadge(); return; }
+    __dbg("-> signed in, loading offices");
     // Actually pull. If it fails, DON'T swallow it silently (that's what left the
     // app showing 0/0/0/0 with no clue). Surface the reason and, if the session
     // is the problem, bounce back to the login screen so a fresh sign-in fixes it.
