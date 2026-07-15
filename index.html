@@ -729,7 +729,7 @@ function cloudInit(){
   if(SB_URL && SB_KEY){
     if(!window.supabase){ lastSyncErr="supabase library didn't load"; }
     else {
-      try{ sb=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true}}); cloudOn=true; }
+      try{ sb=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true,storageKey:"salesly_auth",storage:window.localStorage}}); cloudOn=true; }
       catch(e){ lastSyncErr="bad Supabase URL or key"; }
     }
   }
@@ -3369,7 +3369,10 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
   loadRoute(); renderRouteBar();   // restore an in-progress route after reopen/refresh
   setSyncBadge();
   updateMeBadge();
-  if(!ME) setTimeout(openWhoAmI,400);   // first-open identity prompt
+  // Only prompt for a display name AFTER a real login exists, and only if one
+  // hasn't been set. If there's no auth session, showLogin() already fired above
+  // and we must NOT cover it with the name picker.
+  if(sbUser && !ME) setTimeout(openWhoAmI,400);
 
   // ---- Startup: open straight to the map and begin following your location ----
   // Runs on every launch / reopen / refresh. The map shows immediately; we then
