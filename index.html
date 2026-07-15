@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v58</title>
+<title>Salesly v59</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -935,6 +935,7 @@ async function cloudHeal(){ return; }
    session there IS no auth.uid(), so an un-signed-in app sees an empty database
    and every write is rejected. The app must sign in before it does anything. */
 let sbUser=null;
+let _loginLock=false;   // when true, the login screen is up and nothing may render over it
 
 async function sbSession(){
   if(!cloudOn||!sb) return null;
@@ -958,6 +959,7 @@ async function sbSignOut(){
 }
 
 function showLogin(msg){
+  _loginLock=true;   // block any map/list render from painting over the form
   const m=document.getElementById('main'); if(!m) return;
   m.innerHTML=`
     <div class="empty" style="max-width:340px;margin:40px auto;text-align:left">
@@ -978,6 +980,7 @@ function showLogin(msg){
     go.disabled=true; go.textContent="Signing in…";
     try{
       await sbSignIn(e,p);
+      _loginLock=false;   // authenticated — release the screen
       await cloudPull(); cloudSubscribe(); cloudLoadReps();
       rebuild(); render(); setSyncBadge();
       toast("Signed in");
@@ -1335,6 +1338,7 @@ function poolMatch(o){
 
 /* ---------- render ---------- */
 function render(){
+  if(_loginLock) return;   // login screen is up — do not overwrite it
   try{ renderInner(); }
   catch(err){
     try{ console.error("renderInner failed:", err); }catch(_){}
@@ -1346,7 +1350,8 @@ function render(){
 }
 // Repaint whichever view is currently showing (used after a background sync so a
 // visible calendar/list/map all stay fresh).
-function renderActive(){ if(state.view==="calendar") renderCalendar(); else render(); }
+function renderActive(){
+  if(_loginLock) return; if(state.view==="calendar") renderCalendar(); else render(); }
 // Re-filter and repaint the list/map WITHOUT rebuilding the More drawer, so an
 // open native date picker isn't destroyed mid-selection. Used by the date inputs.
 let _skipDrawerRebuild=false;
@@ -1493,7 +1498,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v58";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v59";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -2438,6 +2443,7 @@ function repVisitsByDate(){
   return map;
 }
 function renderCalendar(){
+  if(_loginLock) return;
   const host=document.getElementById('calview'); if(!host) return;
   if(!meName()){
     host.innerHTML=`<div class="cal-empty"><h3>Who are you?</h3><p>Set your name to see your visit calendar.</p><button class="cal-setme" id="calSetMe">Set who you are</button></div>`;
