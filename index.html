@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v53</title>
+<title>Salesly v54</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -727,9 +727,22 @@ const VIEWPORT_LIMIT=4000;        // A/B pins per pan. Clustering handles this f
 let _lastBox="";                  // dedupe identical viewport queries
 let _didInitialFit=false;         // fit the map to the user ONCE on first load, then never yank them back
 
-function cloudInit(){
+// Wait for the Supabase CDN script to finish loading. On a FIRST home-screen
+// launch the app boots before the CDN lib is ready, so window.supabase is still
+// undefined — that race is why the login prompt didn't appear until you closed
+// and reopened. Poll briefly until it's there.
+async function waitForSupabaseLib(maxMs){
+  const start=Date.now();
+  while(!window.supabase){
+    if(Date.now()-start>(maxMs||6000)) return false;
+    await new Promise(r=>setTimeout(r,80));
+  }
+  return true;
+}
+async function cloudInit(){
   cloudOn=false; sb=null; lastSyncErr="";
   if(SB_URL && SB_KEY){
+    if(!window.supabase){ await waitForSupabaseLib(6000); }
     if(!window.supabase){ lastSyncErr="supabase library didn't load"; }
     else {
       try{ sb=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true,storageKey:"salesly_auth",storage:window.localStorage}}); cloudOn=true; }
@@ -1480,7 +1493,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v53";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v54";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -3081,7 +3094,7 @@ function openSync(){
     if(!tok){toast("Paste your anon key");return;}
     if(/service_role/i.test(tok)){toast("⚠️ That's the service_role key — use the anon key");return;}
     pulling=false; pushing=false;
-    cloudSaveConfig(u, tok); cloudUnsubscribe(); cloudInit();
+    cloudSaveConfig(u, tok); cloudUnsubscribe(); await cloudInit();
     if(!cloudOn){ toast("⚠️ "+(lastSyncErr||"couldn't connect")); return; }
     toast("Connecting…");
     const user=await sbSession();
@@ -3344,7 +3357,7 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
         ()=>{}, {enableHighAccuracy:false,timeout:12000,maximumAge:300000});
     }
   }catch(e){}
-  cloudInit();
+  await cloudInit();
   setSyncBadge();                 // reflect saved sync state immediately
 
   // Wire up all buttons/handlers IMMEDIATELY, before any network work, so the UI
