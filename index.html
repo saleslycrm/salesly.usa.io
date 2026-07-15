@@ -808,12 +808,15 @@ async function loadViewport(bounds, opts){
       min_lng:sw.lng, min_lat:sw.lat, max_lng:ne.lng, max_lat:ne.lat, p_limit:VIEWPORT_LIMIT
     });
     if(error) throw error;
+    // RPC now returns a jsonb array (one value) to dodge PostgREST's 1000-row
+    // response cap. Normalize to a plain array whether it arrives parsed or as text.
+    const rows = Array.isArray(data) ? data : (typeof data==="string" ? JSON.parse(data||"[]") : (data||[]));
     _lastBox=key;
-    lastRawRows=(data||[]).length;
+    lastRawRows=rows.length;
     // Merge, don't replace: an office with unpushed local edits must not be
     // clobbered by the server's older copy on the next pan.
     const next={};
-    (data||[]).forEach(r=>{ const o=dbToApp(r); next[o.id]=DIRTY.has(o.id)?(store.offices[o.id]||o):o; });
+    rows.forEach(r=>{ const o=dbToApp(r); next[o.id]=DIRTY.has(o.id)?(store.offices[o.id]||o):o; });
     DIRTY.forEach(id=>{ if(store.offices[id]) next[id]=store.offices[id]; });
     store.offices=next;
     try{localStorage.setItem(SK,JSON.stringify(store));}catch(e){}
