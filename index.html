@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v63</title>
+<title>Salesly v64</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -388,6 +388,8 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 .prox-banner .pr-row:last-child{border-bottom:none;}
 .prox-banner .pr-row:active{background:var(--teal-wash);}
 .prox-banner .pr-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
+.prox-banner .pr-chg{color:#f59e0b;font-size:10px;flex:0 0 auto;margin-left:2px;animation:pchg 1.4s ease-in-out infinite;}
+@keyframes pchg{0%,100%{opacity:.35}50%{opacity:1}}
 .prox-banner .pr-nm{flex:1 1 auto;min-width:0;font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .prox-banner .pr-ft{flex:0 0 auto;font-family:var(--mono);font-size:11.5px;color:var(--teal-deep);font-weight:700;}
 .leaflet-container{font-family:var(--sans);}
@@ -1207,6 +1209,28 @@ function visitsToString(visits){
     return r ? (v.date+"~"+c+"~"+n+"~"+r) : (n ? (v.date+"~"+c+"~"+n) : (v.date+"~"+c));
   }).join(" | ");
 }
+// ── Customer lifecycle status colors ──────────────────────────────────────
+// Active green · New teal · Winback purple · Falloff orange · Inactive red.
+// Status comes from the dashboard's invoice sync (offices.status).
+function statusColor(o){
+  switch((o.status||"").toLowerCase()){
+    case 'active':   return '#16a34a';  // green
+    case 'new':      return '#0d9488';  // teal
+    case 'winback':  return '#7c3aed';  // purple
+    case 'falloff':  return '#d97706';  // orange
+    case 'inactive': return '#dc2626';  // red
+    default:         return '';         // unknown/unsynced
+  }
+}
+function statusLabel(o){ const st=(o.status||"").trim(); return st?st.charAt(0).toUpperCase()+st.slice(1).toLowerCase():''; }
+// Did this office's status change in the last N days? (powers the "just changed"
+// badge). status_changed_at is stamped by the DB only on a real transition.
+function statusRecentlyChanged(o, days){
+  if(!o.status_changed_at) return false;
+  const t=new Date(o.status_changed_at).getTime();
+  if(isNaN(t)) return false;
+  return (Date.now()-t) <= (days||7)*86400000;
+}
 function lastColor(o){ if(!o.visits)return ""; for(const v of o.visits){ if(v.color)return v.color; } return ""; }
 // Auto-visit on edit: when a rep changes anything about an office, treat that as
 // a visit TODAY so they don't have to remember the "Log visit" button. We only
@@ -1508,7 +1532,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v63";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v64";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1590,7 +1614,15 @@ function renderInner(){
 
 /* ---------- Map view ---------- */
 function pinClass(o){ const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!==""; return isVisited(o)?"visited":(scOn?"scanner":""); }
-function pinStyle(o){ const c=lastColor(o); return c?`style="background:${VCOLORS[c]};border-color:#fff"`:""; }
+function pinStyle(o){
+  const sc=statusColor(o);
+  const c=lastColor(o);
+  const bg = sc || (c?VCOLORS[c]:'');
+  if(!bg) return '';
+  // A gold ring highlights offices whose status changed in the last 7 days.
+  const ring = statusRecentlyChanged(o,7) ? ';box-shadow:0 0 0 2px #f59e0b,0 0 0 3px #fff' : '';
+  return `style="background:${bg};border-color:#fff${ring}"`;
+}
 function haversine(lat1,lng1,lat2,lng2){
   const R=3958.8, toRad=x=>x*Math.PI/180;
   const dLat=toRad(lat2-lat1), dLng=toRad(lng2-lng1);
@@ -2206,9 +2238,13 @@ let _proxOpen=false;        // is the expandable list showing?
 let _proxFrozen=null;       // frozen snapshot of [{o,d}] while the list is open
 function buildProxRow(o,ftDist){
   const visited = isVisited(o);
-  const dot = `<span class="pr-dot" style="background:${visited?'var(--green)':'var(--line-strong)'}"></span>`;
+  const sc = statusColor(o);
+  const dotColor = sc || (visited?'var(--green)':'var(--line-strong)');
+  const dot = `<span class="pr-dot" style="background:${dotColor}"></span>`;
+  // Small "NEW→" style pulse badge if the status changed in the last 7 days.
+  const changed = statusRecentlyChanged(o,7) ? `<span class="pr-chg" title="Just changed to ${esc(statusLabel(o))}">●</span>` : '';
   return `<button class="pr-row" data-proxid="${esc(o.id)}">`+
-    `${dot}<span class="pr-nm">${esc(o.name||'(unnamed office)')}</span>`+
+    `${dot}<span class="pr-nm">${esc(o.name||'(unnamed office)')}</span>${changed}`+
     `<span class="pr-ft">${ftDist.toLocaleString()} ft</span></button>`;
 }
 function renderProxList(){
@@ -3304,7 +3340,22 @@ function wire(){
     const ed=e.target.closest('[data-edit]'); if(ed){openForm(ed.getAttribute('data-edit'));return;}
     const dl=e.target.closest('[data-del]'); if(dl){delOffice(dl.getAttribute('data-del'));return;}
   });
-  on('btnAdd','click',()=>openForm(null));
+  on('btnAdd','click',()=>{
+    // If we have the rep's GPS location, pre-fill coordinates AND reverse-geocode
+    // the address — same convenience as dropping a pin. They're standing in the
+    // office, so their location IS the office. Falls back to a blank form if no GPS.
+    if(userPos && userPos.lat && userPos.lng){
+      const la=+userPos.lat.toFixed(6), lo=+userPos.lng.toFixed(6);
+      toast("📍 Looking up address…");
+      reverseGeocode(la,lo).then(info=>{
+        openForm(null, {lat:la, lng:lo, addr:info.addr||"", city:info.city||"", zip:info.zip||""});
+        if(info.addr||info.city){ toast("Address filled from your location — check & name it"); }
+        else { toast("Location saved — type the address"); }
+      }).catch(()=>{ openForm(null, {lat:la, lng:lo}); });
+    } else {
+      openForm(null);
+    }
+  });
   on('btnExport','click',openExport);
   on('btnSync','click',openSync);
   on('meBadge','click',openWhoAmI);
