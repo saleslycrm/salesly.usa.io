@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v67</title>
+<title>Salesly v68</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -139,7 +139,9 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:calc
 .officelist{display:none;background:var(--surface-2);}
 .cityrow.open .officelist{display:block;}
 
-.office{padding:13px 16px 13px 22px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;}
+.office{padding:13px 16px 13px 22px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;max-width:100%;overflow:hidden;}
+html,body{overflow-x:hidden;}
+#main{overflow-x:hidden;}
 .pracgrp{border-top:1px solid var(--line);}
 .prachdr{display:flex;align-items:center;gap:9px;padding:12px 16px 12px 22px;width:100%;text-align:left;background:none;border:none;cursor:pointer;}
 .prachdr:active{background:var(--surface-2);}
@@ -1165,6 +1167,17 @@ function statusSet(o){
   if(!list.length){ const e=effStatus(o); if(e) list.push(e); }
   return list.sort((a,b)=>(ST_RANK[b]||0)-(ST_RANK[a]||0));
 }
+/* Compact chips for LIST ROWS: status only (no doctor names — those live in the
+   popup/detail where there's room), max two + a "+N" pill. Keeps every row one
+   line tall and inside the viewport; full names never overflow the list. */
+function labChipCompact(o){
+  const set=statusSet(o);
+  if(!set.length) return "";
+  const shown=set.slice(0,2);
+  let html=shown.map(st=>`<span class="labchip lab-${st}">${LAB_LABEL[st]||st}</span>`).join('');
+  if(set.length>2) html+=`<span class="labchip" style="background:var(--line-strong);color:var(--ink);">+${set.length-2}</span>`;
+  return html;
+}
 function labChip(o){
   const ds=labDoctorStatuses(o);
   if(ds.length>1){
@@ -1582,7 +1595,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v67";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v68";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1634,7 +1647,7 @@ function renderInner(){
           <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
         </div>
         <div class="onm"><div class="otitle">${esc(o.name)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
-        ${labChip(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
+        ${labChipCompact(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
         ${stripLab(o.notes)?'<span class="dot note"></span>':''}
       </button>`;
     };
