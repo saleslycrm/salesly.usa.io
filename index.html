@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v68</title>
+<title>Salesly v70</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -721,7 +721,8 @@ const GS_CFG_KEY="ildental_sb";
 let SB_URL="", SB_KEY="";
 // OpenRouteService key — powers the road-following route line. Unchanged.
 let ORS_KEY="eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImE4MGQzNTA4ZjgyYzQwZjA5MGNmNzQ3MDZjMjEzZGQxIiwiaCI6Im11cm11cjY0In0=";
-try{const c=JSON.parse(localStorage.getItem(GS_CFG_KEY)||"{}");SB_URL=c.url||"";SB_KEY=c.token||"";if(c.orsKey)ORS_KEY=c.orsKey;}catch(e){}
+let GC_KEY="";                 // optional Geocodio API key — rooftop-accurate reverse geocoding for pin drops
+try{const c=JSON.parse(localStorage.getItem(GS_CFG_KEY)||"{}");SB_URL=c.url||"";SB_KEY=c.token||"";if(c.orsKey)ORS_KEY=c.orsKey;if(c.gcKey)GC_KEY=c.gcKey;}catch(e){}
 
 let sb=null, cloudOn=false, pulling=false, pushing=false;
 let lastSyncAt=0, lastSyncErr="", lastRawRows=0, lastSyncJSON="";
@@ -758,7 +759,7 @@ async function cloudInit(){
 function cloudSaveConfig(url, token){
   SB_URL=(url||"").trim().replace(/\/+$/,"");
   if(typeof token==="string"){ const t=token.trim(); if(t) SB_KEY=t; }
-  try{localStorage.setItem(GS_CFG_KEY,JSON.stringify({url:SB_URL,token:SB_KEY,orsKey:ORS_KEY}));}catch(e){}
+  try{localStorage.setItem(GS_CFG_KEY,JSON.stringify({url:SB_URL,token:SB_KEY,orsKey:ORS_KEY,gcKey:GC_KEY}));}catch(e){}
 }
 
 /* ---------- row mapping: Postgres snake_case <-> app camelCase ----------
@@ -1595,7 +1596,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v68";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v70";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1872,7 +1873,43 @@ function buildMap(){
 // Reverse-geocode a point to a street address via OpenStreetMap Nominatim (free,
 // no key). Returns {addr,city,zip} or {} on any failure — the pin still works
 // even if the lookup fails, since lat/lng are captured regardless.
+/* Your own database beats the free geocoder: Geocodio gave these offices
+   rooftop-accurate addresses, while Nominatim INTERPOLATES house numbers along
+   the street (why a pin at 505 Davis Rd can read "559" and drift per foot).
+   If a known office sits within ~45m (150ft) of the pin, use ITS verified
+   address as the suggestion. Falls back to Nominatim for genuinely new spots. */
+function nearestKnownAddress(lat,lng){
+  try{
+    let best=null,bestD=1e9;
+    DB.forEach(o=>{
+      if(!o.addr||!o.lat||!o.lng) return;
+      const d=haversine(lat,lng,+o.lat,+o.lng)*5280;   // miles→feet
+      if(d<bestD){ bestD=d; best=o; }
+    });
+    if(best && bestD<=150){
+      return {addr:best.addr, city:best.city||"", zip:best.zip||"", src:best.name, ft:Math.round(bestD)};
+    }
+  }catch(e){}
+  return null;
+}
+async function geocodioReverse(lat,lng){
+  if(!GC_KEY) return null;
+  try{
+    const url="https://api.geocod.io/v1.7/reverse?q="+encodeURIComponent(lat+","+lng)+"&api_key="+encodeURIComponent(GC_KEY);
+    const res=await fetch(url); if(!res.ok) return null;
+    const d=await res.json(); const r=d&&d.results&&d.results[0];
+    if(!r) return null;
+    const c=r.address_components||{};
+    const addr=((c.number?c.number+" ":"")+(c.formatted_street||c.street||"")).trim();
+    if(!addr) return null;
+    return {addr:addr, city:c.city||"", zip:c.zip||"", src:"", ft:0, rooftop:(r.accuracy_type==="rooftop")};
+  }catch(e){ return null; }
+}
 async function reverseGeocode(lat, lng){
+  const known=nearestKnownAddress(lat,lng);
+  if(known) return known;
+  const gc=await geocodioReverse(lat,lng);   // rooftop accuracy when a key is set
+  if(gc) return gc;
   try{
     const url="https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat="+encodeURIComponent(lat)+"&lon="+encodeURIComponent(lng)+"&zoom=18&addressdetails=1";
     const res=await fetch(url,{headers:{"Accept":"application/json"}});
@@ -3205,6 +3242,9 @@ function openSync(){
     <div class="fld"><label>Anon (public) key</label>
       <input id="sy_token" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="eyJhbGciOi…" value="${esc(SB_KEY)}">
       <div style="font-size:11px;color:var(--ink-soft);margin-top:5px;line-height:1.5;">The <b>anon / publishable</b> key — never the secret key.</div></div>
+    <div class="fld"><label>Geocodio API key (optional)</label>
+      <input id="sy_gc" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="rooftop-accurate pin-drop addresses" value="${esc(GC_KEY)}">
+      <div style="font-size:11px;color:var(--ink-soft);margin-top:5px;line-height:1.5;">With a key, dropped pins get exact house numbers from Geocodio (2,500 free/day). Without one, addresses are approximate.</div></div>
     ${sbUser?`<div style="font-size:13px;color:var(--green);margin:10px 0;font-family:var(--mono);">● Signed in as ${esc(sbUser.email||'')}</div>`:`
     <div style="border-top:1px solid var(--line);margin:14px 0 10px;padding-top:12px;font-size:12px;color:var(--ink);font-weight:700;">Your login</div>
     <div class="fld"><label>Email</label>
@@ -3244,6 +3284,7 @@ function openSync(){
     const errEl=document.getElementById('sy_err'); const setErr=(m)=>{ if(errEl)errEl.textContent=m||""; };
     setErr("");
     pulling=false; pushing=false;
+    const gcEl=document.getElementById('sy_gc'); if(gcEl){ GC_KEY=gcEl.value.trim(); }
     cloudSaveConfig(u, tok); cloudUnsubscribe(); await cloudInit();
     if(!cloudOn){ setErr(lastSyncErr||"Couldn't connect — check the URL and key"); return; }
 
@@ -3431,7 +3472,8 @@ function wire(){
       toast("📍 Looking up address…");
       reverseGeocode(la,lo).then(info=>{
         openForm(null, {lat:la, lng:lo, addr:info.addr||"", city:info.city||"", zip:info.zip||""});
-        if(info.addr||info.city){ toast("Address filled from your location — check & name it"); }
+        if(info.src){ toast("Address matched to "+info.src+" ("+info.ft+" ft) — verify before saving"); }
+        else if(info.addr||info.city){ toast("Address filled from your location — check & name it"); }
         else { toast("Location saved — type the address"); }
       }).catch(()=>{ openForm(null, {lat:la, lng:lo}); });
     } else {
