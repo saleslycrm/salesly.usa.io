@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v66</title>
+<title>Salesly v67</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -180,7 +180,7 @@ body.cal-view .fab{display:none;}
 .sheet-hd{display:flex;align-items:center;gap:10px;padding:8px 16px 14px;border-bottom:1px solid var(--line);flex:0 0 auto;}
 .sheet-hd h2{font-family:var(--display);font-size:19px;margin:0;flex:1;font-weight:700;}
 .sheet-x{font-size:22px;color:var(--ink-faint);padding:2px 6px;line-height:1;}
-.sheet-body{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:18px 16px;padding-bottom:calc(var(--safe-bottom) + 28px);}
+.sheet-body{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;padding:18px 16px;padding-bottom:calc(var(--safe-bottom) + 28px);}
 
 .fld{margin-bottom:20px;}
 .fld label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:8px;}
@@ -426,7 +426,7 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 .pin.scanner{background:var(--amber);}
 
 /* ---- Lab pipeline status (written daily by the Lab→Salesly bridge) ---- */
-.labchip{display:inline-flex;align-items:center;font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:8px;color:#fff;flex:none;line-height:1.5;}
+.labchip{display:inline-flex;align-items:center;font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:8px;color:#fff;flex:none;line-height:1.5;max-width:100%;margin:1px 0;}
 .lab-active{background:#5fbe7d;}   /* light green */
 .lab-new{background:#12a5a0;}      /* teal */
 .lab-winback{background:#8e5bd1;}  /* purple */
@@ -1036,6 +1036,7 @@ let followHeartbeat=null;    // backstop timer if the watch goes quiet (iOS thro
 let userMovedMap=false;      // you panned/zoomed manually -> pause auto-recenter briefly
 let _selfMove=false;         // guard so OUR recenters don't count as "you moved the map"
 let _popupOpen=false;        // a marker popup is open -> don't rebuild/recenter
+let _mapDirty=false;         // a marker rebuild was skipped while a popup was open; run it on close
 let _spiderOpen=false;       // a cluster is spiderfied (expanded) -> don't rebuild/recenter
 let _interactAt=0;           // when a popup/spider opened (stale-flag safety net)
 let _lastFollowKey="";       // signature of currently-shown follow markers (skip needless rebuilds)
@@ -1581,7 +1582,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v66";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v67";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1793,7 +1794,12 @@ function buildMap(){
   // refresh rebuild/recenter the map — that was collapsing the cluster before you
   // could tap a pin. Track both states and pause refresh accordingly.
   mapObj.on('popupopen', ()=>{ _popupOpen=true; _interactAt=Date.now(); });
-  mapObj.on('popupclose', ()=>{ _popupOpen=false; });
+  mapObj.on('popupclose', ()=>{
+    _popupOpen=false;
+    // If office data refreshed while the popup was open we deferred the marker
+    // rebuild so the popup wouldn't be destroyed under the user. Do it now.
+    if(_mapDirty){ _mapDirty=false; setTimeout(()=>{ try{ render(); }catch(e){} }, 60); }
+  });
   clusterLayer.on('spiderfied', ()=>{ _spiderOpen=true; _interactAt=Date.now(); userMovedMap=true; });
   clusterLayer.on('unspiderfied', ()=>{ _spiderOpen=false;
     clearTimeout(mapObj._resumeT); mapObj._resumeT=setTimeout(()=>{ userMovedMap=false; },6000); });
@@ -2226,10 +2232,15 @@ function refreshMap(filtered){
     // flicker is what was collapsing clusters and dropping taps.
     const key=pts.map(o=>o.id).sort().join(",");
     if(key!==_lastFollowKey){
-      clusterLayer.clearLayers();
-      _popupOpen=false; _spiderOpen=false;   // clearing removes any open popup/spider
-      clusterLayer.addLayers(pts.map(makeMarker));
-      _lastFollowKey=key;
+      if(_popupOpen||_spiderOpen){
+        // The user is READING a popup — never yank it away because a background
+        // sync changed the office set. Defer the rebuild until the popup closes.
+        _mapDirty=true;
+      } else {
+        clusterLayer.clearLayers();
+        clusterLayer.addLayers(pts.map(makeMarker));
+        _lastFollowKey=key;
+      }
     }
     // Recenter on you ONLY if you haven't manually panned away. Never change zoom
     // here — hold the user's current zoom so the view stays where they left it.
@@ -2243,9 +2254,10 @@ function refreshMap(filtered){
   }
 
   // ---- NEARBY MODE (legacy "Nearest 25") ------------------------------------
-  // Not following: always rebuild from scratch (and reset the follow signature).
+  // Not following: rebuild from scratch — UNLESS the user has a popup open, in
+  // which case defer so we never close it out from under them mid-read.
+  if(_popupOpen||_spiderOpen){ _mapDirty=true; return; }
   clusterLayer.clearLayers();
-  _popupOpen=false; _spiderOpen=false;   // no popup/spider survives a full clear
   _lastFollowKey="";
   if(nearbyMode && userPos){
     pts=pts.map(o=>({o,d:haversine(userPos.lat,userPos.lng,o.lat,o.lng)}))
@@ -2677,7 +2689,7 @@ function openDetail(id){
       <a class="maplink" href="${mapAppleLink(o)}" target="_blank" rel="noopener">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg> Apple Maps</a>
     </div>
-    ${labStatus(o)?`<div style="margin:10px 2px 2px;display:flex;align-items:center;gap:8px;">${labChip(o)}<span style="font-size:11px;color:#5c7370;">Lab pipeline status — updated by the daily import</span></div>`:''}
+    ${labStatus(o)?`<div style="margin:10px 2px 2px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;">${labChip(o)}<span style="font-size:11px;color:#5c7370;flex:1 1 100%;">Lab pipeline status — updated by the daily import</span></div>`:''}
     <div class="dgrid">
       <div class="dcard full"><div class="dl">Address</div><a class="dv" href="${mapAppleLink(o)}" target="_blank" rel="noopener">${esc(o.addr)}, ${esc(o.city)}, IL ${esc(o.zip)}</a></div>
       <div class="dcard"><div class="dl">Phone</div>${o.phone?`<a class="dv" href="tel:${esc(o.phone)}">${esc(o.phone)}</a>`:'<div class="dv" style="color:var(--ink-faint)">—</div>'}</div>
