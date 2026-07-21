@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v70</title>
+<title>Salesly v72</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -628,6 +628,21 @@ function loadMe(){
 function setMe(id){ const r=repById(id); if(!r)return; ME=r; try{localStorage.setItem(ME_KEY,id);}catch(e){} _calRepFilter="__me__"; }
 function isAdmin(){ return !!(ME&&ME.role==="admin"); }
 function meName(){ return ME?String(ME.name||"").replace(/\s+/g," ").trim():""; }
+/* Tolerant rep-name matching. Old ported visits are tagged "Jason"; the new
+   system knows him as "Jason Flesher" (reps table) or "jason.f" (email-derived
+   identity). Exact compare attributed those visits to NOBODY — no My Visits,
+   empty calendar. Rule: names match when their name-tokens are pairwise
+   prefix-compatible: "jason" ≈ "Jason Flesher" ≈ "jason.f", but ≉ "Ryan". */
+function repMatch(a,b){
+  const tok=x=>String(x||"").toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const A=tok(a), B=tok(b);
+  if(!A.length||!B.length) return false;
+  const n=Math.min(A.length,B.length);
+  for(let i=0;i<n;i++){
+    if(!(A[i].startsWith(B[i])||B[i].startsWith(A[i]))) return false;
+  }
+  return true;
+}
 function repTerritory(){ return ME?(ME.territory||""):""; }
 // ---- Territory matching helpers ----
 // The Territory field is free text, so make matching forgiving: full state names
@@ -1317,7 +1332,7 @@ function toast(msg,undo){const t=document.getElementById('toast');t.innerHTML=es
 function isMine(o){
   const me=meName(); if(!me)return false;
   if((o.addedBy||"").toLowerCase()===me.toLowerCase())return true;
-  return !!(o.visits&&o.visits.some(v=>(v.rep||"").toLowerCase()===me.toLowerCase()));
+  return !!(o.visits&&o.visits.some(v=>repMatch(v.rep,me)));
 }
 // Shared: do the three stackable priority groups pass for this office?
 // They AND together; within Heat the selected colors OR together.
@@ -1564,7 +1579,7 @@ function renderInner(){
   // device is a non-admin rep (so on launch a rep sees their own stats, not team totals).
   let rf0=state.repFilter.length===1?String(state.repFilter[0]).replace(/\s+/g," ").toLowerCase().trim():"";
   if(!rf0 && ME && !(isAdmin&&isAdmin())){ rf0=String(ME.name||"").replace(/\s+/g," ").toLowerCase().trim(); }
-  const visitedByRep=(o)=>!!(o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===rf0));
+  const visitedByRep=(o)=>!!(o.visits&&o.visits.some(v=>repMatch(v.rep,rf0)));
   const addedByRep=(o)=>String(o.addedBy||"").replace(/\s+/g," ").toLowerCase().trim()===rf0;
   let tot,vis,personal,added,repName="";
   // Stats spec (same philosophy for every rep, present and future):
@@ -1587,16 +1602,19 @@ function renderInner(){
     repName=(REPS||[]).map(r=>r.name).find(n=>String(n).replace(/\s+/g," ").toLowerCase().trim()===rf0)||state.repFilter[0]||"";
     tot=scoped.length;
     vis=scoped.filter(touched).length;
-    personal=scoped.filter(visitedByRep).length;
-    added=scoped.filter(o=>addedByRep(o)&&!isImport(o)).length;
+    // Personal visits/added count across the WHOLE book — a rep's totals are a
+    // fact about them, not about the current state/viewport. Using `scoped` here
+    // was the "11 becomes 7" / "changes by view" bug.
+    personal=DB.filter(visitedByRep).length;
+    added=DB.filter(o=>addedByRep(o)&&!isImport(o)).length;
   } else {
     tot=scoped.length;
     vis=scoped.filter(touched).length;
     const meN=String((typeof ME!=="undefined"&&ME&&ME.name)||"").replace(/\s+/g," ").toLowerCase().trim();
-    personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
-    added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
+    personal=meN?DB.filter(o=>o.visits&&o.visits.some(v=>repMatch(v.rep,meN))).length:0;
+    added=DB.filter(o=>!o.seed&&!isImport(o)&&addedByRep(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v70";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v72";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -2608,7 +2626,7 @@ function repVisitsByDate(){
     o.visits.forEach(v=>{
       if(!v||!v.date) return;
       const rep=visitRep(o,v).toLowerCase();
-      if(want!==null){ if(rep!==want) return; }   // specific rep
+      if(want!==null){ if(!repMatch(rep,want)) return; }   // specific rep (tolerant: "Jason" ≈ "Jason Flesher")
       (map[v.date]=map[v.date]||[]).push({o,v});
     });
   });
