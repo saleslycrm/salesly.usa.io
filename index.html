@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v72</title>
+<title>Salesly v73</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1614,7 +1614,7 @@ function renderInner(){
     personal=meN?DB.filter(o=>o.visits&&o.visits.some(v=>repMatch(v.rep,meN))).length:0;
     added=DB.filter(o=>!o.seed&&!isImport(o)&&addedByRep(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v72";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v73";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -3410,22 +3410,45 @@ function openManageReps(){
       <button class="btn btn-primary" id="nr_add">Add rep</button>
     </div>
     <div class="dl" style="margin:18px 0 6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);">Security</div>
-    <button class="btn btn-ghost" id="nr_pin" style="width:100%;">Change admin PIN</button>`;
+    <button class="btn btn-ghost" id="nr_pin" style="width:100%;">Change admin PIN</button>
+    <div id="nr_pinform" style="display:none;margin-top:10px;padding:12px;background:var(--surface-2);border-radius:12px;">
+      <div class="fld" style="margin-bottom:8px;"><label>Current PIN</label><input id="nr_curpin" type="tel" inputmode="numeric" autocomplete="off" placeholder="current PIN"></div>
+      <div class="fld" style="margin-bottom:8px;"><label>New PIN (4+ digits)</label><input id="nr_newpin" type="tel" inputmode="numeric" autocomplete="off" placeholder="new PIN"></div>
+      <div class="fld" style="margin-bottom:10px;"><label>Confirm new PIN</label><input id="nr_newpin2" type="tel" inputmode="numeric" autocomplete="off" placeholder="re-enter new PIN"></div>
+      <div id="nr_pinerr" style="color:var(--danger);font-size:12px;min-height:15px;margin-bottom:8px;"></div>
+      <div class="actions" style="margin:0;">
+        <button class="btn btn-ghost" id="nr_pincancel">Cancel</button>
+        <button class="btn btn-primary" id="nr_pinsave">Save PIN</button>
+      </div>
+    </div>`;
   REPS.forEach(r=>{ const b=document.querySelector('[data-delrep="'+r.id+'"]');
     if(b) b.onclick=()=>{ if(!confirm("Remove "+r.name+"? Their past visits stay stamped with their name."))return;
       REPS=REPS.filter(x=>x.id!==r.id); saveReps(); if(ME&&ME.id===r.id){ME=null;try{localStorage.removeItem(ME_KEY);}catch(e){}} updateMeBadge(); openManageReps(); }; });
   const back=document.getElementById('nr_back'); if(back) back.onclick=openWhoAmI;
   const pinBtn=document.getElementById('nr_pin');
+  const pinForm=document.getElementById('nr_pinform');
+  const pinErr=()=>document.getElementById('nr_pinerr');
   if(pinBtn) pinBtn.onclick=()=>{
-    const me=REPS.find(r=>r.role==="admin");
-    if(!me){ toast("No admin account"); return; }
-    const cur=prompt("Enter the CURRENT admin PIN:");
-    if(cur===null) return;
-    if(String(cur).trim()!==String(me.pin||"").trim()){ toast("Incorrect PIN"); return; }
-    const np=prompt("Enter a NEW admin PIN (4+ digits):");
-    if(np===null) return;
-    if(!/^\d{4,}$/.test(String(np).trim())){ toast("PIN must be at least 4 digits"); return; }
-    me.pin=String(np).trim(); saveReps(); toast("Admin PIN updated");
+    if(!REPS.find(r=>r.role==="admin")){ toast("No admin account"); return; }
+    // Toggle the inline form (no native prompt() — that closes the sheet on iOS).
+    if(pinForm){ pinForm.style.display = pinForm.style.display==="none" ? "block" : "none";
+      if(pinForm.style.display==="block"){ const c=document.getElementById('nr_curpin'); if(c) setTimeout(()=>c.focus(),50); } }
+  };
+  const pinCancel=document.getElementById('nr_pincancel');
+  if(pinCancel) pinCancel.onclick=()=>{ if(pinForm) pinForm.style.display="none"; if(pinErr())pinErr().textContent=""; };
+  const pinSave=document.getElementById('nr_pinsave');
+  if(pinSave) pinSave.onclick=()=>{
+    const me=REPS.find(r=>r.role==="admin"); if(!me){ toast("No admin account"); return; }
+    const cur=(document.getElementById('nr_curpin')||{}).value||"";
+    const np=(document.getElementById('nr_newpin')||{}).value||"";
+    const np2=(document.getElementById('nr_newpin2')||{}).value||"";
+    const setErr=m=>{ if(pinErr()) pinErr().textContent=m; };
+    if(String(cur).trim()!==String(me.pin||"").trim()){ setErr("Current PIN is incorrect."); return; }
+    if(!/^\d{4,}$/.test(String(np).trim())){ setErr("New PIN must be at least 4 digits."); return; }
+    if(String(np).trim()!==String(np2).trim()){ setErr("New PINs don't match."); return; }
+    me.pin=String(np).trim(); saveReps();
+    if(pinForm) pinForm.style.display="none"; setErr("");
+    toast("Admin PIN updated");
   };
   const add=document.getElementById('nr_add'); if(add) add.onclick=()=>{
     const name=((document.getElementById('nr_name')||{}).value||"").trim();
