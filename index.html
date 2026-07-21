@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v65</title>
+<title>Salesly v66</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1134,7 +1134,45 @@ function labStatuses(o){
   });
   return out;
 }
-function labChip(o){ const st=labStatus(o); return st?`<span class="labchip lab-${st}">${LAB_LABEL[st]}</span>`:""; }
+/* Per-doctor statuses from the 📊 LAB lines (one line per doctor, written by the
+   dashboard): "📊 LAB: WINBACK · Dr. Carol White · last case …". Returns
+   [{st, dr}] so mixed-status practices can show WHO is what — and split pins. */
+function labDoctorStatuses(o){
+  const nts=o&&o.notes; if(!nts)return [];
+  const out=[];
+  String(nts).split("\n").forEach(l=>{
+    const m=l.match(/LAB:\s*([A-Za-z]+)(?:\s*[·\u00B7]\s*(Dr\.?\s*[^·\u00B7\n]+?))?(?:\s*[·\u00B7]|\s*$)/i);
+    if(!m)return;
+    const w=m[1].toLowerCase(); let st="";
+    if(w.indexOf("new")===0)st="new";
+    else if(w.indexOf("winback")===0)st="winback";
+    else if(w.indexOf("falloff")===0)st="falloff";
+    else if(w.indexOf("inactive")===0)st="inactive";
+    else if(w.indexOf("active")===0||w.indexOf("current")===0)st="active";
+    if(!st)return;
+    out.push({st:st, dr:(m[2]||"").trim()});
+  });
+  return out;
+}
+const ST_RANK={"new":5,winback:4,active:3,falloff:2,inactive:1};
+const ST_HEX={active:'#16a34a',"new":'#2563eb',winback:'#7c3aed',falloff:'#d97706',inactive:'#dc2626'};
+/* Distinct statuses on an office, highest-priority first. Multi-doctor notes
+   drive splits; single/no notes falls back to the rolled-up effStatus. */
+function statusSet(o){
+  const seen={},list=[];
+  labDoctorStatuses(o).forEach(x=>{ if(!seen[x.st]){seen[x.st]=1;list.push(x.st);} });
+  if(!list.length){ const e=effStatus(o); if(e) list.push(e); }
+  return list.sort((a,b)=>(ST_RANK[b]||0)-(ST_RANK[a]||0));
+}
+function labChip(o){
+  const ds=labDoctorStatuses(o);
+  if(ds.length>1){
+    // Mixed practice: one chip per doctor so you can see exactly who is what.
+    return ds.map(x=>`<span class="labchip lab-${x.st}">${LAB_LABEL[x.st]}${x.dr?` \u00B7 ${esc(x.dr)}`:''}</span>`).join(' ');
+  }
+  const st=(ds[0]&&ds[0].st)||labStatus(o)||effStatus(o);
+  return st?`<span class="labchip lab-${st}">${LAB_LABEL[st]||st}</span>`:"";
+}
 // Notes are shown/edited WITHOUT the machine-written 📊 LAB line; the line stays
 // in the stored value (it powers the tag + filters and the bridge maintains it).
 function stripLab(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>!/LAB:\s*[A-Za-z]/i.test(l)).join("\n").replace(/^\n+|\n+$/g,""); }
@@ -1543,7 +1581,7 @@ function renderInner(){
     personal=meN?scoped.filter(o=>o.visits&&o.visits.some(v=>String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim()===meN)).length:0;
     added=scoped.filter(o=>!o.seed&&!isImport(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v65";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v66";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -1626,13 +1664,19 @@ function renderInner(){
 /* ---------- Map view ---------- */
 function pinClass(o){ const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!==""; return isVisited(o)?"visited":(scOn?"scanner":""); }
 function pinStyle(o){
-  // Priority: lifecycle status color. No status? visited offices are TEAL,
-  // never-visited are GREY — per spec, so the map reads as
-  // status-at-a-glance with a clear visited/unvisited base layer.
-  const sc=statusColor(o);
-  const bg = sc || (o.visited ? '#0d9488' : '#94a3b8');
+  // Mixed-status practices (e.g. one Active + one Winback doctor) get a SPLIT
+  // pin — diagonal two-color gradient of the top two statuses by priority.
+  // Single status = solid color. No status: visited TEAL, never-visited GREY.
+  const set=statusSet(o);
+  let bgCss;
+  if(set.length>=2){
+    bgCss=`background:linear-gradient(135deg, ${ST_HEX[set[0]]} 0 50%, ${ST_HEX[set[1]]} 50% 100%)`;
+  } else {
+    const bg=(set.length?ST_HEX[set[0]]:'') || (o.visited ? '#0d9488' : '#94a3b8');
+    bgCss=`background:${bg}`;
+  }
   const ring = statusRecentlyChanged(o,7) ? ';box-shadow:0 0 0 2px #f59e0b,0 0 0 3px #fff' : '';
-  return `style="background:${bg};border-color:#fff${ring}"`;
+  return `style="${bgCss};border-color:#fff${ring}"`;
 }
 function haversine(lat1,lng1,lat2,lng2){
   const R=3958.8, toRad=x=>x*Math.PI/180;
@@ -2249,9 +2293,11 @@ let _proxOpen=false;        // is the expandable list showing?
 let _proxFrozen=null;       // frozen snapshot of [{o,d}] while the list is open
 function buildProxRow(o,ftDist){
   const visited = isVisited(o);
-  const sc = statusColor(o);
-  const dotColor = sc || (visited?'#0d9488':'#94a3b8');   // teal visited · grey unvisited
-  const dot = `<span class="pr-dot" style="background:${dotColor}"></span>`;
+  const set = statusSet(o);
+  let dotBg;
+  if(set.length>=2){ dotBg=`linear-gradient(135deg, ${ST_HEX[set[0]]} 0 50%, ${ST_HEX[set[1]]} 50% 100%)`; }
+  else { dotBg=(set.length?ST_HEX[set[0]]:'') || (visited?'#0d9488':'#94a3b8'); }   // teal visited · grey unvisited
+  const dot = `<span class="pr-dot" style="background:${dotBg}"></span>`;
   // Small "NEW→" style pulse badge if the status changed in the last 7 days.
   const changed = statusRecentlyChanged(o,7) ? `<span class="pr-chg" title="Just changed to ${esc(statusLabel(o))}">●</span>` : '';
   return `<button class="pr-row" data-proxid="${esc(o.id)}">`+
