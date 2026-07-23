@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v73</title>
+<title>Salesly v75</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -603,12 +603,25 @@ const DEFAULT_REPS=[
 ];
 let REPS=[];        // the live registry
 let ME=null;        // {id,name,role,territory} for this device, or null until chosen
+const ADMIN_PIN_DEFAULT="2468";   // canonical admin PIN baked into the app
 function loadReps(){
   try{const r=JSON.parse(localStorage.getItem(REPS_KEY)||"null"); REPS=Array.isArray(r)&&r.length?r:DEFAULT_REPS.slice();}
   catch(e){ REPS=DEFAULT_REPS.slice(); }
-  // Ensure any admin account has a PIN (older saved data may predate the PIN lock).
+  // Force EVERY admin account's PIN to the canonical value on load. This clears
+  // the "stale PIN on one device" trap: previously we only set a PIN when one was
+  // MISSING, so a drifted value on a phone would never self-correct. Now every
+  // device lands on the same known PIN. (Change it later via Forgot PIN?, which
+  // is gated by the real Supabase admin login.)
   let changed=false;
-  REPS.forEach(r=>{ if(r.role==="admin" && (!r.pin||!String(r.pin).trim())){ r.pin="2468"; changed=true; } });
+  REPS.forEach(r=>{
+    if(r.role==="admin"){
+      // admin always carries the canonical PIN
+      if(String(r.pin||"")!==ADMIN_PIN_DEFAULT){ r.pin=ADMIN_PIN_DEFAULT; changed=true; }
+    } else {
+      // NON-admins must never have a PIN. Strip it if one ever crept in.
+      if("pin" in r){ delete r.pin; changed=true; }
+    }
+  });
   if(changed) saveReps();
 }
 const REPS_TS_KEY="ildental_reps_ts";
@@ -742,7 +755,31 @@ try{const c=JSON.parse(localStorage.getItem(GS_CFG_KEY)||"{}");SB_URL=c.url||"";
 let sb=null, cloudOn=false, pulling=false, pushing=false;
 let lastSyncAt=0, lastSyncErr="", lastRawRows=0, lastSyncJSON="";
 let pollTimer=null, watchdog=null, sbChannel=null;
-const DIRTY=new Set();            // office ids edited locally, not yet pushed
+/* supabase-js has no request timeout, so a stalled connection hangs forever.
+   Because loadViewport/cloudPush set `pulling`/`pushing` before awaiting, a hang
+   left those flags true permanently — offices would stop loading and the 20s
+   retry could never sync again, with no error shown. Every network call is now
+   bounded; the finally blocks then clear the flags and normal retries resume. */
+const NET_TIMEOUT_MS=25000;
+function withTimeout(promise, label, ms){
+  return Promise.race([
+    promise,
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error((label||"request")+" timed out")), ms||NET_TIMEOUT_MS))
+  ]);
+}
+const DIRTY_KEY="ildental_dirty";
+/* Office ids edited locally and not yet pushed. This MUST survive an app
+   restart: iOS kills backgrounded PWAs freely, and if DIRTY were lost the next
+   viewport load would overwrite the un-synced edit with the server's older copy
+   — silently destroying a rep's visit. Persisted on every change, restored on
+   boot, cleared only after a confirmed push. */
+const DIRTY=new Set(function(){
+  try{ const a=JSON.parse(localStorage.getItem(DIRTY_KEY)||"[]"); return Array.isArray(a)?a:[]; }
+  catch(e){ return []; }
+}());
+function persistDirty(){
+  try{ localStorage.setItem(DIRTY_KEY, JSON.stringify(Array.from(DIRTY))); }catch(e){}
+}
 const VIEWPORT_LIMIT=4000;        // A/B pins per pan. Clustering handles this fine; dense metros (Chicago ~3,800 prospects) now load fully instead of stopping at a few hundred.
 let _lastBox="";                  // dedupe identical viewport queries
 let _didInitialFit=false;         // fit the map to the user ONCE on first load, then never yank them back
@@ -843,9 +880,9 @@ async function loadViewport(bounds, opts){
   if(pulling) return false;
   pulling=true;
   try{
-    const {data,error}=await sb.rpc("get_offices_in_viewport",{
+    const {data,error}=await withTimeout(sb.rpc("get_offices_in_viewport",{
       min_lng:sw.lng, min_lat:sw.lat, max_lng:ne.lng, max_lat:ne.lat, p_limit:VIEWPORT_LIMIT
-    });
+    }), "loading offices");
     if(error) throw error;
     // RPC now returns a jsonb array (one value) to dodge PostgREST's 1000-row
     // response cap. Normalize to a plain array whether it arrives parsed or as text.
@@ -881,9 +918,40 @@ async function cloudPush(silent){
   pushing=true;
   const ids=Array.from(DIRTY);
   try{
+    // ── Non-destructive merge before writing ────────────────────────────────
+    // The office upsert replaces the WHOLE row, so a rep pushing a stale copy
+    // would erase visits/notes another rep added in the meantime. Re-read the
+    // server's current visits+notes for exactly these offices and fold them in,
+    // so a push can only ever ADD to the history, never remove from it.
+    try{
+      if(ids.length){
+        const {data:cur}=await withTimeout(sb.from("offices").select("id,visits,notes").in("id",ids), "merge check", 12000);
+        (cur||[]).forEach(srv=>{
+          const loc=store.offices[srv.id]; if(!loc) return;
+          // visits: union by date; a date present on both keeps the local entry.
+          const seen={}, out=[];
+          const add=e=>{ e=String(e||"").trim(); if(!e) return;
+            const d=e.split("~")[0]; if(d && !seen[d]){ seen[d]=1; out.push(e); } };
+          parseVisits(loc.visits).forEach(v=>add([v.date,v.color||"",v.note||"",v.rep||""].join("~")));
+          String(srv.visits||"").split("|").forEach(add);
+          out.sort((a,b)=>String(b).localeCompare(String(a)));   // newest first
+          loc.visits=parseVisits(out.join(" | "));
+          // notes: union of lines, server lines first so nothing is dropped.
+          const lines=[], has={};
+          String(srv.notes||"").split("\n").concat(String(loc.notes||"").split("\n"))
+            .forEach(l=>{ l=l.trim(); if(l && !has[l]){ has[l]=1; lines.push(l); } });
+          loc.notes=lines.join("\n");
+        });
+      }
+    }catch(mergeErr){
+      // A failed pre-read must not block the push — the visit_log ledger below
+      // is append-only and still captures every visit.
+      console.warn("visit merge skipped:", mergeErr && mergeErr.message);
+    }
+
     const rows=ids.map(id=>store.offices[id]).filter(Boolean).map(appToDb);
     if(rows.length){
-      const {error}=await sb.from("offices").upsert(rows,{onConflict:"id"});
+      const {error}=await withTimeout(sb.from("offices").upsert(rows,{onConflict:"id"}), "saving offices");
       if(error) throw error;
     }
     const logs=[];
@@ -906,10 +974,11 @@ async function cloudPush(silent){
     if(logs.length){
       // ignoreDuplicates: the ledger is append-only. An already-logged visit is
       // a no-op, never an overwrite.
-      const {error}=await sb.from("visit_log").upsert(logs,{onConflict:"log_id",ignoreDuplicates:true});
+      const {error}=await withTimeout(sb.from("visit_log").upsert(logs,{onConflict:"log_id",ignoreDuplicates:true}), "saving visits");
       if(error) throw error;
     }
     ids.forEach(id=>DIRTY.delete(id));
+    persistDirty();
     lastSyncAt=Date.now(); lastSyncErr="";
     if(!silent) toast("Synced to team");
     return true;
@@ -975,7 +1044,7 @@ async function sbSignIn(email, password){
 async function sbSignOut(){
   if(sb){ try{ await sb.auth.signOut(); }catch(e){} }
   sbUser=null;
-  store.offices={}; DIRTY.clear(); _lastBox="";
+  store.offices={}; DIRTY.clear(); persistDirty(); _lastBox="";
   try{localStorage.removeItem(SK);}catch(e){}
   rebuild(); render(); showLogin();
 }
@@ -1067,17 +1136,43 @@ let undoStack=[];
 /* ---------- persistence ---------- */
 function load(){ try{const r=localStorage.getItem(SK); if(r)store=JSON.parse(r);}catch(e){} if(!store.offices||typeof store.offices!=="object")store.offices={}; }
 // Local cache is now just an offline mirror; Postgres is the source of truth.
-function save(silent){ try{localStorage.setItem(SK,JSON.stringify(store));}catch(e){toast("⚠️ Save failed (storage full?)");return;} if(cloudOn){cloudPush(true).then(()=>{try{setSyncBadge();}catch(e){}});} if(!silent)toast(cloudOn?"Saved & syncing":"Saved (offline — will sync)");}
+function save(silent){
+  // Writing the local cache and pushing to the server are INDEPENDENT. The old
+  // code returned early when localStorage was full, so the visit never reached
+  // the database — the rep saw a warning and assumed it was only a local issue.
+  let localOk=true;
+  try{ localStorage.setItem(SK,JSON.stringify(store)); }
+  catch(e){
+    localOk=false;
+    // Quota exceeded: keep the data that actually matters (edited + visited
+    // offices) so nothing un-synced is lost, and drop the prospect cache.
+    try{
+      const keep={};
+      Object.keys(store.offices||{}).forEach(id=>{
+        const o=store.offices[id];
+        if(DIRTY.has(id) || (o && o.visits && (typeof o.visits==="string"?o.visits.trim():o.visits.length))) keep[id]=o;
+      });
+      localStorage.setItem(SK,JSON.stringify({offices:keep}));
+      localOk=true;
+      toast("⚠️ Storage full — trimmed the prospect cache (your visits are safe)");
+    }catch(e2){
+      toast("⚠️ Device storage full — syncing to the server now");
+    }
+  }
+  // Push regardless of how the local write went.
+  if(cloudOn){ cloudPush(true).then(()=>{try{setSyncBadge();}catch(e){}}); }
+  if(!silent && localOk) toast(cloudOn?"Saved & syncing":"Saved (offline — will sync)");
+}
 // Every write path funnels through here: patch the office, flag it dirty, push.
 function upsertLocal(id, patch){
   const cur=store.offices[id]||{id:id};
   store.offices[id]=Object.assign({},cur,patch,{id:id});
-  DIRTY.add(id);
+  DIRTY.add(id); persistDirty();
   return store.offices[id];
 }
 function newOfficeId(){ return "c"+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
 function pushUndo(label){ undoStack.push({snap:JSON.stringify(store),label}); if(undoStack.length>40)undoStack.shift(); }
-function doUndo(){ if(!undoStack.length){toast("Nothing to undo");return;} const u=undoStack.pop(); let snap=null; try{ snap=JSON.parse(u.snap); }catch(e){} if(!snap||typeof snap!=="object"){ toast("Couldn't undo (snapshot unreadable)"); return; } store=snap; if(!store.offices)store.offices={}; Object.keys(store.offices).forEach(id=>DIRTY.add(id)); save(true); rebuild(); render(); toast("Reverted: "+u.label); }
+function doUndo(){ if(!undoStack.length){toast("Nothing to undo");return;} const u=undoStack.pop(); let snap=null; try{ snap=JSON.parse(u.snap); }catch(e){} if(!snap||typeof snap!=="object"){ toast("Couldn't undo (snapshot unreadable)"); return; } store=snap; if(!store.offices)store.offices={}; Object.keys(store.offices).forEach(id=>DIRTY.add(id)); persistDirty(); save(true); rebuild(); render(); toast("Reverted: "+u.label); }
 
 /* The gzip inflate + seed decompressor lived here. Both are gone: the office
    list is fetched from Postgres, so there is nothing to unpack. */
@@ -1090,7 +1185,10 @@ function rebuild(){
   const TXT=["name","addr","city","zip","county","phone","email","scanner","lab","drs","hours","visitDay","notes","addedBy","starterKit","welcomeEmail","pricelist"];
   const norm=o=>{TXT.forEach(k=>{ if(o[k]==null)o[k]=""; else if(typeof o[k]!=="string")o[k]=String(o[k]); });
     if(!o.state||!String(o.state).trim()){ o.state=stateFromZip(o.zip); }
-    if(!o.state||!String(o.state).trim()){ o.state="Illinois"; }
+    // Deliberately NOT defaulting to a state here. Forcing "Illinois" made any
+    // office with a missing/unresolvable zip invisible to reps in other states
+    // (the state filter would never match). Left blank, the GPS proximity rule
+    // still shows it to whoever is standing near it.
     o.visits=parseVisits(o.visits);
     if(o.active===undefined)o.active=true;
     o.visited=!!(o.visits&&o.visits.length);
@@ -1614,7 +1712,7 @@ function renderInner(){
     personal=meN?DB.filter(o=>o.visits&&o.visits.some(v=>repMatch(v.rep,meN))).length:0;
     added=DB.filter(o=>!o.seed&&!isImport(o)&&addedByRep(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v73";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v75";
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
