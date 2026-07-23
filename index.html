@@ -780,6 +780,10 @@ const DIRTY=new Set(function(){
 function persistDirty(){
   try{ localStorage.setItem(DIRTY_KEY, JSON.stringify(Array.from(DIRTY))); }catch(e){}
 }
+/* The app version lives in ONE place: the <title> tag. Everything that shows or
+   compares a version reads it from here, so the header, the update check and the
+   page title can never disagree. Bumping a build = editing the <title> only. */
+const APP_VER=(String(document.title).match(/\bv[\w.\-]+/)||[""])[0];
 const VIEWPORT_LIMIT=4000;        // A/B pins per pan. Clustering handles this fine; dense metros (Chicago ~3,800 prospects) now load fully instead of stopping at a few hundred.
 let _lastBox="";                  // dedupe identical viewport queries
 let _didInitialFit=false;         // fit the map to the user ONCE on first load, then never yank them back
@@ -1712,7 +1716,7 @@ function renderInner(){
     personal=meN?DB.filter(o=>o.visits&&o.visits.some(v=>repMatch(v.rep,meN))).length:0;
     added=DB.filter(o=>!o.seed&&!isImport(o)&&addedByRep(o)).length;
   }
-  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · v75";
+  document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · "+APP_VER;
   document.getElementById('statbar').innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
@@ -3830,6 +3834,74 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
 // tear it down AND force ONE automatic reload to pull the fresh copy. We use a
 // sessionStorage flag so it can only reload once (no infinite loop). After this,
 // no SW controls the app ever again, so updates just work — no delete/re-add.
+/* ---- AUTO-UPDATE: reps must never clear a cache to get a new build ----
+   GitHub Pages serves index.html with its own Cache-Control (~10 min on the CDN
+   and in the browser), and <meta http-equiv="Cache-Control"> is ignored for the
+   document. So a redeployed file keeps being served from cache — which is why
+   updating used to mean deleting and re-adding the app on every device.
+
+   Fix: on launch (and when the app is resumed) fetch THIS page's first bytes
+   with cache:'no-store' and a unique query string, which bypasses both the
+   browser cache and the CDN. Read the version out of its <title> and compare it
+   with the running one. If the server is newer, reload once through a
+   cache-busting URL. The running version is read from our own <title>, so there
+   is only ever ONE place the version lives and it cannot drift. */
+(function autoUpdate(){
+  const RUNNING = (String(document.title).match(/\bv[\w.\-]+/) || [""])[0];
+  if(!RUNNING) return;
+  const SEEN_KEY = "_sl_updated_to";
+  let lastCheck = 0;
+
+  async function fetchServerVersion(){
+    const url = location.pathname + "?_v=" + Date.now();
+    let txt = "";
+    // The <title> sits in the first kilobyte, so ask for just that when the host
+    // supports range requests; fall back to the full document otherwise.
+    try{
+      const r = await fetch(url, { cache:"no-store", headers:{ "Range":"bytes=0-2047" } });
+      if(r.ok || r.status === 206) txt = await r.text();
+    }catch(_){}
+    if(!txt){
+      try{
+        const r2 = await fetch(url, { cache:"no-store" });
+        if(!r2.ok) return null;
+        txt = await r2.text();
+      }catch(_){ return null; }
+    }
+    const t = txt.match(/<title>([^<]*)<\/title>/i);
+    if(!t) return null;
+    const m = t[1].match(/\bv[\w.\-]+/);
+    return m ? m[0] : null;
+  }
+
+  async function check(){
+    if(navigator.onLine === false) return;
+    const server = await fetchServerVersion();
+    if(!server || server === RUNNING) return;
+    // Only ever reload ONCE per version per session — no update loops.
+    try{ if(sessionStorage.getItem(SEEN_KEY) === server) return; }catch(_){}
+    try{ sessionStorage.setItem(SEEN_KEY, server); }catch(_){}
+    // Don't yank the page out from under someone mid-edit; retry shortly.
+    const busy = document.body.classList.contains("sheet-open") ||
+                 (typeof _popupOpen !== "undefined" && _popupOpen);
+    if(busy){ setTimeout(check, 20000); return; }
+    try{ if(typeof toast === "function") toast("Updating to v" + server + "…", true); }catch(_){}
+    setTimeout(function(){ location.replace(location.pathname + "?b=" + server); }, 700);
+  }
+
+  function maybeCheck(){
+    if(Date.now() - lastCheck < 300000) return;   // at most every 5 minutes
+    lastCheck = Date.now();
+    check();
+  }
+
+  setTimeout(function(){ lastCheck = Date.now(); check(); }, 2500);  // after boot
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState === "visible") maybeCheck();
+  });
+  window.addEventListener("online", maybeCheck);
+})();
+
 (function killServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   // Always try to remove any registrations + caches.
