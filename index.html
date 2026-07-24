@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v75</title>
+<title>Salesly v76</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1127,6 +1127,23 @@ let followHeartbeat=null;    // backstop timer if the watch goes quiet (iOS thro
 let userMovedMap=false;      // you panned/zoomed manually -> pause auto-recenter briefly
 let _selfMove=false;         // guard so OUR recenters don't count as "you moved the map"
 let _popupOpen=false;        // a marker popup is open -> don't rebuild/recenter
+let tileLayerObj=null;       // the basemap layer, kept so we can force a redraw
+let _tileFails=0;            // consecutive tile failures since the last success
+let _tileRecoverT=null;
+/* Re-request the basemap. Debounced, because a dead connection fires tileerror
+   for every tile on screen at once and we only want one recovery pass. */
+function recoverTiles(force){
+  if(!mapObj || !tileLayerObj) return;
+  if(navigator.onLine === false && !force) return;   // nothing to gain yet
+  try{
+    mapObj.invalidateSize(false);   // the webview may have resized while hidden
+    tileLayerObj.redraw();          // drop and re-fetch every visible tile
+  }catch(e){}
+}
+function scheduleTileRecover(){
+  if(_tileRecoverT) return;
+  _tileRecoverT=setTimeout(()=>{ _tileRecoverT=null; if(_tileFails>0) recoverTiles(); }, 2500);
+}
 let _mapDirty=false;         // a marker rebuild was skipped while a popup was open; run it on close
 let _spiderOpen=false;       // a cluster is spiderfied (expanded) -> don't rebuild/recenter
 let _interactAt=0;           // when a popup/spider opened (stale-flag safety net)
@@ -1905,9 +1922,27 @@ function routeAppleURL(ordered, startLat, startLng){
 function buildMap(){
   if(mapBuilt) return;
   mapObj=L.map('map',{zoomControl:false,tap:true}).setView([41.85,-87.85],10);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    maxZoom:19, attribution:'© OpenStreetMap'
-  }).addTo(mapObj);
+  /* Map tiles are the one thing that ALWAYS needs the network — office pins come
+     from the local cache, which is why the pins can be fine while the map behind
+     them is blank white.
+
+     Leaflet never retries a tile that failed. So if the device is associated
+     with a Wi-Fi access point that has no working internet (driving past an
+     open hotspot, a captive portal), every tile request fails once and stays
+     failed — even after the phone falls back to cellular. Backgrounding the app
+     makes it worse, because iOS drops the decoded tile images from memory and
+     they all get re-requested at the moment the connection is worst.
+
+     Below: keep a handle on the layer, notice failures, and re-request the
+     tiles when the app is brought back or the connection returns. */
+  tileLayerObj = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    maxZoom:19, attribution:'© OpenStreetMap',
+    crossOrigin:true,
+    keepBuffer:4          // hold a wider ring of tiles so small pans don't re-fetch
+  });
+  tileLayerObj.on('tileerror', ()=>{ _tileFails++; scheduleTileRecover(); });
+  tileLayerObj.on('tileload',  ()=>{ _tileFails=0; });
+  tileLayerObj.addTo(mapObj);
   clusterLayer=L.markerClusterGroup({chunkedLoading:true,maxClusterRadius:50,spiderfyOnMaxZoom:true});
   mapObj.addLayer(clusterLayer);
   mapObj.on('popupopen', wirePopup);
@@ -3692,12 +3727,19 @@ function wire(){
     if(state.view==="map" && !followMode){
       /* auto-follow on tab-switch disabled — tap the crosshair to follow */
     }
+    // Returning to the app: the webview may have been resized or had its tile
+    // images evicted while hidden. Re-measure and re-fetch so we never sit on a
+    // blank basemap. Slight delay so layout settles first.
+    if(state.view==="map") setTimeout(()=>recoverTiles(true), 250);
     if(!cloudOn) return;
     pulling=false; pushing=false;
     try{ const changed=await cloudPull(); if(changed){ rebuild(); renderActive(); } }catch(e){}
     if(!pollTimer) cloudSubscribe();
   });
   window.addEventListener('focus',()=>{ if(cloudOn&&!pollTimer) cloudSubscribe(); });
+  // Connectivity restored (e.g. dead Wi-Fi finally handed off to cellular) —
+  // pull the tiles that failed while it was down.
+  window.addEventListener('online', ()=>{ _tileFails=0; recoverTiles(true); });
 }
 
 /* ---------- boot ---------- */
