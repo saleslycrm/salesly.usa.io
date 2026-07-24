@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v77</title>
+<title>Salesly v80</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -640,7 +640,30 @@ function loadMe(){
 }
 function setMe(id){ const r=repById(id); if(!r)return; ME=r; try{localStorage.setItem(ME_KEY,id);}catch(e){} _calRepFilter="__me__"; }
 function isAdmin(){ return !!(ME&&ME.role==="admin"); }
-function meName(){ return ME?String(ME.name||"").replace(/\s+/g," ").trim():""; }
+/* The rep's display name. Falls back to the signed-in Supabase account when the
+   device hasn't picked an identity yet — otherwise every visit that rep logs is
+   stamped with an empty rep field and shows up as "Unattributed" on the daily
+   report, with no way to tell afterwards who made it. */
+function meName(){
+  const n = ME ? String(ME.name||"").replace(/\s+/g," ").trim() : "";
+  if(n) return n;
+  try{
+    const u = (typeof sbUser!=="undefined" && sbUser) ? sbUser : null;
+    if(u){
+      const meta = u.user_metadata || {};
+      const guess = meta.name || meta.full_name || "";
+      if(guess) return String(guess).trim();
+      // match the email local-part against the known rep list ("jason.f" -> Jason Flesher)
+      const local = String(u.email||"").split("@")[0];
+      if(local){
+        const hit = (REPS||[]).find(r=>repMatch(local, r.name) || repMatch(local, r.email||""));
+        if(hit) return hit.name;
+        return local;
+      }
+    }
+  }catch(e){}
+  return "";
+}
 /* Tolerant rep-name matching. Old ported visits are tagged "Jason"; the new
    system knows him as "Jason Flesher" (reps table) or "jason.f" (email-derived
    identity). Exact compare attributed those visits to NOBODY — no My Visits,
@@ -1104,7 +1127,7 @@ async function cloudLoadReps(){
 }
 
 let PRAC_OPEN=new Set();
-let DB=[], state={tab:"city",filter:[],q:"",openCity:null,view:"list",dFrom:"",dTo:"",expand:"",repFilter:[],
+let DB=[], state={tab:"city",filter:[],q:"",openCity:null,view:"map",dFrom:"",dTo:"",expand:"",repFilter:[],
   gVisit:"",        // "" | "visited" | "unvisited" | "mine"  (stackable group)
   gStatus:"",       // "" | "active" | "inactive"            (stackable group)
   gHeat:[],         // subset of ["green","yellow","red"] — OR within the group
@@ -1145,7 +1168,7 @@ function freshSession(){
     }
     state.gVisit=""; state.gStatus=""; state.gHeat=[]; state.gLab=[]; state.filter=[];
     state.q=""; const sb=document.getElementById('q'); if(sb) sb.value="";
-    if(state.view==="calendar") setView("map");
+    if(state.view!=="map") setView("map");
     _lastBox="";                                  // force a viewport re-pull
     if(typeof recenterOnUser==="function") recenterOnUser();
     else if(mapObj && userPos) mapObj.setView([userPos.lat,userPos.lng], 13);
@@ -3845,7 +3868,26 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
   // hasn't been set. If there's no auth session, showLogin() already fired above
   // and we must NOT cover it with the name picker.
   // "Who are you?" auto-prompt removed — the signed-in user already identifies them.
-  if(sbUser && !ME && sbUser.email){ try{ ME=sbUser.email.split("@")[0]; saveMe && saveMe(); }catch(e){} }
+  /* Signing in IS identifying yourself, so adopt the authenticated account as
+     this device's rep automatically — no separate "who you are" step.
+
+     This previously assigned the email's local part as a STRING, so ME.name was
+     undefined and every visit that rep logged was stamped with an empty rep and
+     landed on the daily report as "Unattributed". ME must be the rep RECORD. */
+  if(sbUser && !ME && sbUser.email){
+    try{
+      const em = String(sbUser.email).toLowerCase().trim();
+      const local = em.split("@")[0];
+      let hit = (REPS||[]).find(r => String(r.email||"").toLowerCase().trim() === em)
+             || (REPS||[]).find(r => repMatch(local, r.name))
+             || (REPS||[]).find(r => repMatch(local, String(r.email||"").split("@")[0]));
+      if(hit){
+        ME = hit;
+        try{ localStorage.setItem(ME_KEY, hit.id); }catch(e){}
+        try{ updateMeBadge && updateMeBadge(); }catch(e){}
+      }
+    }catch(e){ console.warn("auto-identify:", e); }
+  }
 
   // ---- Startup: open straight to the map and begin following your location ----
   // Runs on every launch / reopen / refresh. The map shows immediately; we then
