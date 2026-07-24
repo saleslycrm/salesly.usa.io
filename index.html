@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v76</title>
+<title>Salesly v77</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1127,6 +1127,32 @@ let followHeartbeat=null;    // backstop timer if the watch goes quiet (iOS thro
 let userMovedMap=false;      // you panned/zoomed manually -> pause auto-recenter briefly
 let _selfMove=false;         // guard so OUR recenters don't count as "you moved the map"
 let _popupOpen=false;        // a marker popup is open -> don't rebuild/recenter
+const LASTSEEN_KEY="ildental_lastseen";
+const STALE_MS=4*60*60*1000;          // 4h idle ⇒ treat the next open as a new session
+function markSeen(){ try{ localStorage.setItem(LASTSEEN_KEY, String(Date.now())); }catch(e){} }
+function idleMs(){
+  try{ const t=parseInt(localStorage.getItem(LASTSEEN_KEY)||"0",10); return t?Date.now()-t:0; }
+  catch(e){ return 0; }
+}
+/* Bring a resumed app back to a clean starting state. Only touches transient
+   view state — never offices, visits or anything pending sync. */
+function freshSession(){
+  try{
+    if(typeof activeRoute!=="undefined" && activeRoute && activeRoute.active){
+      activeRoute=null;
+      try{ localStorage.removeItem(ROUTE_KEY); }catch(e){}
+      try{ clearRouteLine&&clearRouteLine(); }catch(e){}
+    }
+    state.gVisit=""; state.gStatus=""; state.gHeat=[]; state.gLab=[]; state.filter=[];
+    state.q=""; const sb=document.getElementById('q'); if(sb) sb.value="";
+    if(state.view==="calendar") setView("map");
+    _lastBox="";                                  // force a viewport re-pull
+    if(typeof recenterOnUser==="function") recenterOnUser();
+    else if(mapObj && userPos) mapObj.setView([userPos.lat,userPos.lng], 13);
+    loadViewport(null,{force:true});
+    toast("Welcome back — refreshed for today");
+  }catch(e){ console.warn("freshSession:",e); }
+}
 let tileLayerObj=null;       // the basemap layer, kept so we can force a redraw
 let _tileFails=0;            // consecutive tile failures since the last success
 let _tileRecoverT=null;
@@ -3730,6 +3756,10 @@ function wire(){
     // Returning to the app: the webview may have been resized or had its tile
     // images evicted while hidden. Re-measure and re-fetch so we never sit on a
     // blank basemap. Slight delay so layout settles first.
+    // A long idle gap means this is effectively a new session, even though iOS
+    // never reloaded the page. Reset the view before anything else redraws.
+    if(idleMs() > STALE_MS) freshSession();
+    markSeen();
     if(state.view==="map") setTimeout(()=>recoverTiles(true), 250);
     if(!cloudOn) return;
     pulling=false; pushing=false;
@@ -3740,6 +3770,10 @@ function wire(){
   // Connectivity restored (e.g. dead Wi-Fi finally handed off to cellular) —
   // pull the tiles that failed while it was down.
   window.addEventListener('online', ()=>{ _tileFails=0; recoverTiles(true); });
+  markSeen();
+  setInterval(markSeen, 60000);                       // keep it fresh while in use
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') markSeen(); });
+  window.addEventListener('pagehide', markSeen);
 }
 
 /* ---------- boot ---------- */
