@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v82</title>
+<title>Salesly VDA84</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -442,6 +442,26 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 </style>
 </head>
 <body>
+<!-- ── Cold-start splash ─────────────────────────────────────────────────────
+     Pure HTML/CSS, so it paints the instant the page loads — before any JS,
+     network, or map work — and covers every intermediate boot state (cache
+     decompress, login check, list flash, map layout). JS fades it out once the
+     follow map is actually on screen; a hard timeout guarantees it can never
+     stick. App-switching doesn't reload the page, so this only appears on a
+     genuine cold start (full swipe-away close, first open, or iOS eviction). -->
+<style>
+  #splash{position:fixed;inset:0;z-index:100000;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;opacity:1;transition:opacity .45s ease;}
+  #splash.gone{opacity:0;pointer-events:none;}
+  #splash .sp-logo{font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:44px;letter-spacing:.5px;color:#0e6a73;}
+  #splash .sp-sub{font-family:ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:3px;color:#8a9a92;text-transform:uppercase;}
+  #splash .sp-dot{margin-top:18px;width:26px;height:26px;border-radius:50%;border:3px solid #d7e2df;border-top-color:#0e6a73;animation:spSpin 0.9s linear infinite;}
+  @keyframes spSpin{to{transform:rotate(360deg)}}
+</style>
+<div id="splash">
+  <div class="sp-logo">Salesly</div>
+  <div class="sp-sub">VDA</div>
+  <div class="sp-dot"></div>
+</div>
 <div id="app">
 <header>
   <div class="ht">
@@ -806,7 +826,7 @@ function persistDirty(){
 /* The app version lives in ONE place: the <title> tag. Everything that shows or
    compares a version reads it from here, so the header, the update check and the
    page title can never disagree. Bumping a build = editing the <title> only. */
-const APP_VER=(String(document.title).match(/\bv[\w.\-]+/)||[""])[0];
+const APP_VER=(String(document.title).match(/\bVDA[\w.\-]*|\bv[\w.\-]+/i)||[""])[0];
 const VIEWPORT_LIMIT=4000;        // A/B pins per pan. Clustering handles this fine; dense metros (Chicago ~3,800 prospects) now load fully instead of stopping at a few hundred.
 let _lastBox="";                  // dedupe identical viewport queries
 let _didInitialFit=false;         // fit the map to the user ONCE on first load, then never yank them back
@@ -1116,6 +1136,7 @@ async function sbSignOut(){
 }
 
 function showLogin(msg){
+  hideSplash();               // the user needs to SEE the login form — never cover it
   try{ openSync(); }catch(e){}
   return;
 }
@@ -1373,9 +1394,14 @@ function labDoctorStatuses(o){
   const nts=o&&o.notes; if(!nts)return [];
   const out=[];
   String(nts).split("\n").forEach(l=>{
-    const m=l.match(/LAB:\s*([A-Za-z]+)(?:\s*[·\u00B7]\s*(Dr\.?\s*[^·\u00B7\n]+?))?(?:\s*[·\u00B7]|\s*$)/i);
+    // Status may be MULTI-WORD ("NEW DOCTOR") — capture everything up to the
+    // first · separator, not just one word. The old single-word pattern
+    // couldn't match "NEW DOCTOR" at all, so New doctors at multi-doctor
+    // practices vanished from the pin blend and from the Lab filter (their
+    // colleagues' lines still parsed, blocking the status-column fallback).
+    const m=l.match(/LAB:\s*([A-Za-z][A-Za-z ]*?)\s*(?:[·\u00B7]\s*(Dr\.?\s*[^·\u00B7\n]+?))?\s*(?:[·\u00B7]|$)/i);
     if(!m)return;
-    const w=m[1].toLowerCase(); let st="";
+    const w=m[1].trim().toLowerCase(); let st="";
     if(w.indexOf("new")===0)st="new";
     else if(w.indexOf("winback")===0)st="winback";
     else if(w.indexOf("falloff")===0)st="falloff";
@@ -2586,6 +2612,19 @@ function refreshMap(filtered){
     (nearbyMode&&userPos ? `${pts.length} nearest` : `${pts.length.toLocaleString()} offices`);
   const markers=pts.map(makeMarker);
   clusterLayer.addLayers(markers);
+  // Lab filter tapped/changed → frame the results ONCE. The map intentionally
+  // never re-fits on ordinary renders anymore (that was yanking reps around),
+  // but a filter tap is an explicit "show me these" — without this, matches
+  // outside the current viewport (e.g. downstate offices) were invisible and
+  // the filter looked broken. Fires only when the SELECTION changes, so pans,
+  // GPS heartbeats and background syncs still never move the view.
+  const _labSig=(state.gLab||[]).slice().sort().join(',');
+  if(_labSig!==window._lastLabFitSig){
+    window._lastLabFitSig=_labSig;
+    if(_labSig && pts.length){
+      try{ mapObj.fitBounds(L.latLngBounds(pts.map(o=>[+o.lat,+o.lng])).pad(0.1),{maxZoom:13}); }catch(e){}
+    }
+  }
   // fit bounds (only when NOT following — following holds the view)
   if(nearbyMode && userPos && pts.length){
     const b=L.latLngBounds(pts.map(o=>[o.lat,o.lng])); b.extend([userPos.lat,userPos.lng]);
@@ -3902,6 +3941,9 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
       if (state.view !== "map") setView("map");
       if (typeof startFollow === "function") startFollow();
     } catch (e) { console.warn("open-on-map:", e); }
+    // Map view is up and follow has been requested — give the container/tiles a
+    // beat to paint behind the splash, then fade it away onto the live map.
+    setTimeout(hideSplash, 650);
   }, 350);
 
   // Decide what to show, in priority order:
@@ -3912,7 +3954,7 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
   //   3. Keys + session -> load offices
   if(!SB_URL || !SB_KEY){
     const m=document.getElementById('main');
-    if(m && !DB.length){ m.innerHTML='<div class="empty"><h3>Not connected</h3><p>Open Settings ▸ Team Sync and paste your Supabase URL and anon key.</p></div>'; }
+    if(m && !DB.length){ m.innerHTML='<div class="empty"><h3>Not connected</h3><p>Open Settings ▸ Team Sync and paste your Supabase URL and anon key.</p></div>'; hideSplash(); }
     setSyncBadge();
   } else {
     // Keys exist. Make sure the client is actually up (retry once if the lib was
@@ -3974,6 +4016,17 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
 })();
 
 // Open the map and kick off follow mode. Safe to call repeatedly.
+/* ---- Splash handoff ----
+   The splash (pure CSS, painted at time zero) hides only when there's something
+   real to look at: the follow map has rendered, OR the login / "Not connected"
+   screen needs the user's attention. A hard 8s timeout means a slow network or
+   an unexpected error can never leave the splash stuck on screen. */
+function hideSplash(){
+  const s=document.getElementById('splash'); if(!s||s.classList.contains('gone'))return;
+  s.classList.add('gone');
+  setTimeout(()=>{ try{ s.remove(); }catch(e){} }, 600);
+}
+setTimeout(hideSplash, 8000);   // absolute failsafe
 function startOnMapFollowing(){
   try{
     if(state.view!=="map") setView("map");
