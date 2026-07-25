@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA93 v93</title>
+<title>Salesly VDA96 v96</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -795,7 +795,7 @@ function stateFromZip(zip){
 const GS_CFG_KEY="ildental_sb";
 let SB_URL="", SB_KEY="";
 // OpenRouteService key — powers the road-following route line. Unchanged.
-let ORS_KEY="eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImE4MGQzNTA4ZjgyYzQwZjA5MGNmNzQ3MDZjMjEzZGQxIiwiaCI6Im11cm11cjY0In0=";
+let ORS_KEY="";   // no longer used — routing is Valhalla only, no API key required
 let GC_KEY="";                 // optional Geocodio API key — rooftop-accurate reverse geocoding for pin drops
 try{const c=JSON.parse(localStorage.getItem(GS_CFG_KEY)||"{}");SB_URL=c.url||"";SB_KEY=c.token||"";if(c.orsKey)ORS_KEY=c.orsKey;if(c.gcKey)GC_KEY=c.gcKey;}catch(e){}
 
@@ -2472,32 +2472,7 @@ function renderRouteBar(){
 // `stops` are office objects; `startLat/Lng` is the rep's start (null in anchor mode,
 // where the anchor itself is already stops[0] and must stay first). Returns a new
 // ordered array, or null on any failure (caller keeps the straight-line order).
-function optimizeOrderORS(stops, startLat, startLng, anchorMode){
-  return new Promise((resolve)=>{
-    try{
-      if(!ORS_KEY || !stops || stops.length<3){ resolve(null); return; }
-      // In anchor mode the first stop is fixed; optimize the rest from there.
-      const fixed = anchorMode ? stops[0] : null;
-      const toOpt = anchorMode ? stops.slice(1) : stops.slice();
-      if(toOpt.length<2){ resolve(null); return; }
-      const startLngLat = anchorMode ? [ +fixed.lng, +fixed.lat ]
-                        : (startLat!=null ? [ +startLng, +startLat ] : [ +toOpt[0].lng, +toOpt[0].lat ]);
-      const jobs = toOpt.map((o,i)=>({id:i+1, location:[+o.lng, +o.lat]}));
-      const vehicles = [{id:1, profile:"driving-car", start:startLngLat, end:startLngLat}];
-      fetch("https://api.openrouteservice.org/optimization",{
-        method:"POST",
-        headers:{"Authorization":ORS_KEY,"Content-Type":"application/json"},
-        body:JSON.stringify({jobs, vehicles})
-      }).then(r=>r.ok?r.json():Promise.reject(r.status)).then(res=>{
-        const steps=res&&res.routes&&res.routes[0]&&res.routes[0].steps;
-        if(!steps){ resolve(null); return; }
-        const order=steps.filter(s=>s.type==="job").map(s=>toOpt[s.id-1]).filter(Boolean);
-        if(order.length!==toOpt.length){ resolve(null); return; }
-        resolve(anchorMode ? [fixed].concat(order) : order);
-      }).catch(()=>resolve(null));
-    }catch(e){ resolve(null); }
-  });
-}
+// (ORS stop-order optimizer removed — routeOptimize() does this locally.)
 // Draw the planned route on the map: numbered pins in order + a line. The line
 // follows actual ROADS via OpenRouteService when a key is set; if the service is
 // unreachable or no key, it falls back to a straight line so it never breaks.
@@ -2553,94 +2528,58 @@ function rgeoPut(sig, geo){
      3. Leg-by-leg via OSRM   → stitch each hop separately, so one impossible
         pair degrades to a straight line for THAT hop only, not the whole route.
    Always resolves to [[lat,lng],…] or null. Never throws. */
+/* ---- Road geometry: ONE routing engine, one code path ----
+   FOSSGIS-hosted Valhalla. No API key, CORS-enabled, community-funded, and
+   backed by the full planet OSM graph. Deliberately the ONLY engine: a chain of
+   fallbacks made behaviour non-deterministic and hid failures behind whichever
+   tier happened to answer. One engine means one thing to check when something
+   goes wrong, and the toast below names the exact error.
+   Resolves to [[lat,lng],…] or null. Never throws. */
 function fetchRoadGeometry(wpLatLng){
-  const toLngLat=c=>[c[1],c[0]];
   var lastErr="";
-  function orsCall(body){
-    if(!ORS_KEY) return Promise.reject("no-key");
-    return fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
-      method:"POST",
-      headers:{"Authorization":ORS_KEY,"Content-Type":"application/json"},
-      body:JSON.stringify(body)
-    }).then(function(r){ if(!r.ok){ lastErr="ORS "+r.status; return Promise.reject(lastErr); } return r.json(); })
-      .then(function(geo){
-        var f = geo && geo.features && geo.features[0];
-        var line = f && f.geometry && f.geometry.coordinates;
-        if(!line || line.length<2){ lastErr="ORS empty"; return Promise.reject(lastErr); }
-        return line.map(function(c){ return [c[1],c[0]]; });
-      });
-  }
-  // TIER 1 — the plain request. This is the exact payload that has always
-  // worked; nothing optional is sent, so there is nothing for the API to
-  // reject. Extra parameters go in the fallback below, never here.
-  function viaORSPlain(){ return orsCall({ coordinates: wpLatLng.map(toLngLat) }); }
-  // TIER 2 — retry with unlimited snap radius, which rescues routes where a
-  // stop's geocode landed too far from any road for the default search.
-  function viaORSSnap(){
-    return orsCall({
-      coordinates: wpLatLng.map(toLngLat),
-      radiuses: wpLatLng.map(function(){ return -1; })
-    });
-  }
-  function osrmPath(list){
-    return list.map(function(c){ return c[1]+","+c[0]; }).join(";");
-  }
-  function viaOSRM(list){
-    return fetch("https://router.project-osrm.org/route/v1/driving/"+osrmPath(list)+"?overview=full&geometries=geojson")
-      .then(function(r){ return r.ok ? r.json() : Promise.reject("OSRM "+r.status); })
+  function call(){
+    var req={ locations: wpLatLng.map(function(c){ return {lat:+c[0], lon:+c[1]}; }),
+              costing:"auto", directions_options:{units:"miles"} };
+    return fetch("https://valhalla1.openstreetmap.de/route?json="+encodeURIComponent(JSON.stringify(req)))
+      .then(function(r){ if(!r.ok){ lastErr="Valhalla "+r.status; return Promise.reject(lastErr); } return r.json(); })
       .then(function(j){
-        var rt = j && j.routes && j.routes[0];
-        var line = rt && rt.geometry && rt.geometry.coordinates;
-        if(!line || line.length<2) return Promise.reject("OSRM empty");
-        return line.map(function(c){ return [c[1],c[0]]; });
+        var legs = j && j.trip && j.trip.legs;
+        if(!legs || !legs.length){ lastErr="Valhalla empty"; return Promise.reject(lastErr); }
+        var out=[];
+        legs.forEach(function(leg,i){
+          var pts=decodePolyline(leg.shape,6);
+          if(i>0) pts=pts.slice(1);          // don't duplicate the shared node
+          out=out.concat(pts);
+        });
+        if(out.length<2){ lastErr="Valhalla short"; return Promise.reject(lastErr); }
+        return out;
       });
   }
-  function viaLegs(){
-    var jobs=[], okCount=0;
-    for(var i=0;i<wpLatLng.length-1;i++){
-      (function(a,b){
-        jobs.push(
-          viaOSRM([a,b])
-            .then(function(g){ okCount++; return g; })
-            .catch(function(){ return [a,b]; })   // that hop only → straight
-        );
-      })(wpLatLng[i], wpLatLng[i+1]);
-    }
-    return Promise.all(jobs).then(function(legs){
-      // If NOT ONE leg actually routed we're simply offline — reject so the
-      // caller keeps the straight line and RETRIES later. Returning the
-      // fabricated straight legs here would have been cached as if it were real
-      // road geometry, permanently freezing that route on straight chords.
-      if(!okCount) return Promise.reject("all legs failed");
-      var out=[];
-      legs.forEach(function(leg,idx){
-        if(idx>0) leg=leg.slice(1);          // don't duplicate the shared node
-        out=out.concat(leg);
-      });
-      return out.length>=2 ? out : Promise.reject("legs empty");
-    });
-  }
-  return viaORSPlain()
-    .catch(function(){ return viaORSSnap(); })
-    .catch(function(){ return viaOSRM(wpLatLng); })
-    .catch(function(){ return viaLegs(); })
+  // Single retry for a transient failure (iOS radio not ready after waking).
+  return call()
     .catch(function(){
-      // One retry pass — transient failures are common right after iOS wakes
-      // the app (radio not ready yet).
-      return new Promise(function(res){ setTimeout(res, 1500); })
-        .then(function(){ return viaORSPlain(); })
-        .catch(function(){ return viaOSRM(wpLatLng); })
-        .catch(function(){ return null; });
+      return new Promise(function(res){ setTimeout(res, 1500); }).then(call);
     })
-    .catch(function(){ return null; })
-    .then(function(geo){
-      if(!geo && typeof toast==="function"){
-        // Say WHY the line is straight instead of failing silently — otherwise
-        // a key/quota problem is indistinguishable from a bug.
+    .catch(function(){
+      if(typeof toast==="function"){
         try{ toast("Straight lines — routing unavailable"+(lastErr?" ("+lastErr+")":"")); }catch(e){}
       }
-      return geo;
+      return null;
     });
+}
+/* Decode an encoded polyline (Valhalla uses 6-digit precision). */
+function decodePolyline(str, precision){
+  var index=0, lat=0, lng=0, out=[], shift, result, byte, factor=Math.pow(10, precision||6);
+  while(index < str.length){
+    shift=0; result=0;
+    do { byte=str.charCodeAt(index++)-63; result|=(byte&0x1f)<<shift; shift+=5; } while(byte>=0x20);
+    lat += ((result&1) ? ~(result>>1) : (result>>1));
+    shift=0; result=0;
+    do { byte=str.charCodeAt(index++)-63; result|=(byte&0x1f)<<shift; shift+=5; } while(byte>=0x20);
+    lng += ((result&1) ? ~(result>>1) : (result>>1));
+    out.push([lat/factor, lng/factor]);
+  }
+  return out;
 }
 /* ---- Request de-duplication ----
    The road line is requested from three places (plotting, keep-alive redraws,
@@ -2652,17 +2591,12 @@ function fetchRoadGeometry(wpLatLng){
 window._rgeoPending = window._rgeoPending || {};
 window._rgeoFailAt  = window._rgeoFailAt  || {};
 function fetchRoadGeometryOnce(sig, wpLatLng){
-  if(window._rgeoPending[sig]) return window._rgeoPending[sig];      // already asking
-  var failedAt=window._rgeoFailAt[sig]||0;
-  if(Date.now()-failedAt < 45000) return Promise.resolve(null);       // cooling down
+  if(window._rgeoPending[sig]) return window._rgeoPending[sig];      // already asking — share it
   var p = fetchRoadGeometry(wpLatLng).then(function(geo){
     delete window._rgeoPending[sig];
-    if(!geo) window._rgeoFailAt[sig]=Date.now();
-    else delete window._rgeoFailAt[sig];
     return geo;
   }, function(){
     delete window._rgeoPending[sig];
-    window._rgeoFailAt[sig]=Date.now();
     return null;
   });
   window._rgeoPending[sig]=p;
@@ -3684,12 +3618,10 @@ function computeOrdered(){
     const sLat=haveGPS?userPos.lat:null;
     const sLng=haveGPS?userPos.lng:null;
     paintRoute();
-    // Ask ORS to optimize the stop ORDER by real driving distance, then re-render
-    // with the better order so it flows into the list, the map, AND Apple Maps.
-    // Anchor stays first. Falls back silently to the straight-line order on any failure.
-    optimizeOrderORS(ordered, sLat, sLng, !!anchorId).then(better=>{
-      if(better && better.length===ordered.length){ ordered=better; paintRoute(); }
-    }).catch(()=>{});
+    // Stop ORDER comes from routeOptimize() — a local nearest-neighbour walk
+    // refined by 2-opt. No network, no key, instant, and deterministic. The old
+    // ORS optimization call was a second metered request per plot that could
+    // silently fail or re-order the list a beat after it rendered.
     function paintRoute(){
     drawRouteOverlay(ordered, sLat, sLng);
     $('rt_list').innerHTML=ordered.length?ordered.map((o,i)=>`<div style="display:flex;gap:9px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);">
