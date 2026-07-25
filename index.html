@@ -12,7 +12,11 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly VDA84</title>
+<!-- Version lives HERE and only here. Keep BOTH tokens in sync when bumping
+     (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
+     the "v" token is what older builds' auto-updaters parse, so phones still
+     running an old build can always find their way to the newest one. -->
+<title>Salesly VDA84 v84</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -4094,7 +4098,13 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
    cache-busting URL. The running version is read from our own <title>, so there
    is only ever ONE place the version lives and it cannot drift. */
 (function autoUpdate(){
-  const RUNNING = (String(document.title).match(/\bv[\w.\-]+/) || [""])[0];
+  // Accept BOTH version styles — "VDA84" (current branding) and "v84" (legacy).
+  // The old parser was lowercase-v only, so a VDA-titled deploy was INVISIBLE
+  // to phones running an older build: they fetched the new file, found no
+  // v-token, and silently stayed stale. The title now carries both tokens and
+  // this parser reads either, so every deploy always dominates the cache.
+  const VER_RE = /\b(?:VDA|v)[\w.\-]+/;
+  const RUNNING = (String(document.title).match(VER_RE) || [""])[0];
   if(!RUNNING) return;
   const SEEN_KEY = "_sl_updated_to";
   let lastCheck = 0;
@@ -4117,7 +4127,7 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
     }
     const t = txt.match(/<title>([^<]*)<\/title>/i);
     if(!t) return null;
-    const m = t[1].match(/\bv[\w.\-]+/);
+    const m = t[1].match(VER_RE);
     return m ? m[0] : null;
   }
 
@@ -4132,7 +4142,7 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
     const busy = document.body.classList.contains("sheet-open") ||
                  (typeof _popupOpen !== "undefined" && _popupOpen);
     if(busy){ setTimeout(check, 20000); return; }
-    try{ if(typeof toast === "function") toast("Updating to v" + server + "…", true); }catch(_){}
+    try{ if(typeof toast === "function") toast("Updating to " + server + "…", true); }catch(_){}
     setTimeout(function(){ location.replace(location.pathname + "?b=" + server); }, 700);
   }
 
@@ -4146,6 +4156,9 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
   document.addEventListener("visibilitychange", function(){
     if(document.visibilityState === "visible") maybeCheck();
   });
+  // iOS home-screen apps sometimes resume via pageshow without a visibility
+  // event — check there too, so a swipe-away + reopen always gets the check.
+  window.addEventListener("pageshow", maybeCheck);
   window.addEventListener("online", maybeCheck);
 })();
 
