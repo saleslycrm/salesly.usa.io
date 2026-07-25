@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v80</title>
+<title>Salesly v82</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -907,13 +907,23 @@ async function loadViewport(bounds, opts){
   if(pulling) return false;
   pulling=true;
   try{
-    const {data,error}=await withTimeout(sb.rpc("get_offices_in_viewport",{
-      min_lng:sw.lng, min_lat:sw.lat, max_lng:ne.lng, max_lat:ne.lat, p_limit:VIEWPORT_LIMIT
-    }), "loading offices");
-    if(error) throw error;
-    // RPC now returns a jsonb array (one value) to dodge PostgREST's 1000-row
-    // response cap. Normalize to a plain array whether it arrives parsed or as text.
-    const rows = Array.isArray(data) ? data : (typeof data==="string" ? JSON.parse(data||"[]") : (data||[]));
+    let rows=null;
+    try{
+      const {data,error}=await withTimeout(sb.rpc("get_offices_in_viewport",{
+        min_lng:sw.lng, min_lat:sw.lat, max_lng:ne.lng, max_lat:ne.lat, p_limit:VIEWPORT_LIMIT
+      }), "loading offices");
+      if(error) throw error;
+      // RPC now returns a jsonb array (one value) to dodge PostgREST's 1000-row
+      // response cap. Normalize to a plain array whether it arrives parsed or as text.
+      rows = Array.isArray(data) ? data : (typeof data==="string" ? JSON.parse(data||"[]") : (data||[]));
+    }catch(rpcErr){
+      // FALLBACK: the RPC is missing, renamed, or erroring server-side. Without
+      // this, the app silently kept showing the stale cached book — statuses the
+      // dashboard pushed never appeared, which read as "sync is broken". Query
+      // the offices table directly instead: every S-tier customer (always shown,
+      // paged past the 1000-row cap) plus A/B prospects inside the box.
+      rows = await loadOfficesDirect(sw, ne);
+    }
     _lastBox=key;
     lastRawRows=rows.length;
     // Merge, don't replace: an office with unpushed local edits must not be
@@ -932,6 +942,30 @@ async function loadViewport(bounds, opts){
     pulling=false;
     try{setSyncBadge();}catch(e){}
   }
+}
+// Direct table read used when the get_offices_in_viewport RPC is unavailable.
+// Mirrors the RPC's contract: ALL active S-tier customers (paged, so the 1000-row
+// PostgREST cap can't truncate the book) + active A/B prospects inside the box.
+async function loadOfficesDirect(sw, ne){
+  const out=[]; const PAGE=1000;
+  for(let from=0;;from+=PAGE){
+    const {data,error}=await withTimeout(
+      sb.from("offices").select("*").eq("tier","S").eq("active",true)
+        .order("id").range(from,from+PAGE-1), "loading customers");
+    if(error) throw error;
+    out.push(...(data||[]));
+    if(!data||data.length<PAGE) break;
+    if(from>30000) break;                      // hard stop
+  }
+  try{
+    // tier.is.null must be matched explicitly — PostgREST's neq drops NULLs.
+    const {data:ab,error:e2}=await withTimeout(
+      sb.from("offices").select("*").or("tier.neq.S,tier.is.null").eq("active",true)
+        .gte("lat",sw.lat).lte("lat",ne.lat).gte("lng",sw.lng).lte("lng",ne.lng)
+        .limit(VIEWPORT_LIMIT), "loading prospects");
+    if(!e2) out.push(...(ab||[]));
+  }catch(e){ /* customers loaded; prospects can wait for the next pan */ }
+  return out;
 }
 // Kept for every existing caller (Team Sync dialog, boot, realtime).
 async function cloudPull(){ return loadViewport(null,{force:true}); }
@@ -1029,8 +1063,13 @@ function cloudSubscribe(){
         const id=String(r.id);
         if(DIRTY.has(id)) return;                   // our own unpushed edit wins
         if(payload.eventType==="DELETE"){ delete store.offices[id]; }
-        else if(store.offices[id]){ store.offices[id]=dbToApp(r); }  // only update what's loaded
-        else return;                                // not in our viewport — ignore
+        else if(store.offices[id]){ store.offices[id]=dbToApp(r); }  // update what's loaded
+        // S-tier (invoiced customers) is ALWAYS shown regardless of viewport, so a
+        // customer the dashboard just synced must appear live — not on the next pan.
+        // This is what carries a fresh dashboard push (new statuses, new offices)
+        // into the open app in real time.
+        else if(r.tier==='S' && r.active!==false){ store.offices[id]=dbToApp(r); }
+        else return;                                // A/B prospect outside our viewport — ignore
         try{ rebuild(); renderActive(); }catch(e){}
       })
       .subscribe();
@@ -1127,7 +1166,7 @@ async function cloudLoadReps(){
 }
 
 let PRAC_OPEN=new Set();
-let DB=[], state={tab:"city",filter:[],q:"",openCity:null,view:"map",dFrom:"",dTo:"",expand:"",repFilter:[],
+let DB=[], state={tab:"city",filter:[],q:"",openCity:null,view:"list",dFrom:"",dTo:"",expand:"",repFilter:[],
   gVisit:"",        // "" | "visited" | "unvisited" | "mine"  (stackable group)
   gStatus:"",       // "" | "active" | "inactive"            (stackable group)
   gHeat:[],         // subset of ["green","yellow","red"] — OR within the group
@@ -1169,6 +1208,7 @@ function freshSession(){
     state.gVisit=""; state.gStatus=""; state.gHeat=[]; state.gLab=[]; state.filter=[];
     state.q=""; const sb=document.getElementById('q'); if(sb) sb.value="";
     if(state.view!=="map") setView("map");
+    try{ startFollow && startFollow(); }catch(e){}
     _lastBox="";                                  // force a viewport re-pull
     if(typeof recenterOnUser==="function") recenterOnUser();
     else if(mapObj && userPos) mapObj.setView([userPos.lat,userPos.lng], 13);
@@ -1324,6 +1364,11 @@ function labStatuses(o){
 /* Per-doctor statuses from the 📊 LAB lines (one line per doctor, written by the
    dashboard): "📊 LAB: WINBACK · Dr. Carol White · last case …". Returns
    [{st, dr}] so mixed-status practices can show WHO is what — and split pins. */
+/* The statuses currently selected in the Lab filter, or null when none are. */
+function labFilterSet(){
+  const g = (state && Array.isArray(state.gLab)) ? state.gLab : [];
+  return g.length ? g : null;
+}
 function labDoctorStatuses(o){
   const nts=o&&o.notes; if(!nts)return [];
   const out=[];
@@ -1345,17 +1390,24 @@ const ST_RANK={"new":5,winback:4,active:3,falloff:2,inactive:1};
 const ST_HEX={active:'#16a34a',"new":'#2563eb',winback:'#7c3aed',falloff:'#d97706',inactive:'#dc2626'};
 /* Distinct statuses on an office, highest-priority first. Multi-doctor notes
    drive splits; single/no notes falls back to the rolled-up effStatus. */
-function statusSet(o){
+function statusSet(o, ignoreFilter){
   const seen={},list=[];
   labDoctorStatuses(o).forEach(x=>{ if(!seen[x.st]){seen[x.st]=1;list.push(x.st);} });
   if(!list.length){ const e=effStatus(o); if(e) list.push(e); }
-  return list.sort((a,b)=>(ST_RANK[b]||0)-(ST_RANK[a]||0));
+  let out=list.sort((a,b)=>(ST_RANK[b]||0)-(ST_RANK[a]||0));
+  if(!ignoreFilter){
+    const f=labFilterSet();
+    if(f){ const only=out.filter(st=>f.indexOf(st)>=0); if(only.length) out=only; }
+  }
+  return out;
 }
 /* Compact chips for LIST ROWS: status only (no doctor names — those live in the
    popup/detail where there's room), max two + a "+N" pill. Keeps every row one
    line tall and inside the viewport; full names never overflow the list. */
 function labChipCompact(o){
-  const set=statusSet(o);
+  let set=statusSet(o);
+  const f=labFilterSet();
+  if(f){ const only=set.filter(st=>f.indexOf(st)>=0); if(only.length) set=only; }
   if(!set.length) return "";
   const shown=set.slice(0,2);
   let html=shown.map(st=>`<span class="labchip lab-${st}">${LAB_LABEL[st]||st}</span>`).join('');
@@ -1363,7 +1415,9 @@ function labChipCompact(o){
   return html;
 }
 function labChip(o){
-  const ds=labDoctorStatuses(o);
+  let ds=labDoctorStatuses(o);
+  const f=labFilterSet();
+  if(f){ const only=ds.filter(x=>f.indexOf(x.st)>=0); if(only.length) ds=only; }
   if(ds.length>1){
     // Mixed practice: one chip per doctor so you can see exactly who is what.
     return ds.map(x=>`<span class="labchip lab-${x.st}">${LAB_LABEL[x.st]}${x.dr?` \u00B7 ${esc(x.dr)}`:''}</span>`).join(' ');
@@ -1513,7 +1567,13 @@ function groupsPass(o){
   if(state.gHeat&&state.gHeat.length){ if(state.gHeat.indexOf(lastColor(o))<0)return false; }
   if(state.gLab&&state.gLab.length){
     if(!labDialPass(o))return false;   // state first — Lab filters never widen to the whole book
-    const sts=labStatuses(o); if(!sts.some(s=>state.gLab.indexOf(s)>=0))return false;
+    // Same source of truth as the pin colors: per-doctor 📊 LAB note lines,
+    // falling back to the offices.status column (statusSet with ignoreFilter=true
+    // so the filter itself can't narrow what it's testing against). Previously
+    // this read ONLY the note lines, so an office whose status arrived via the
+    // status column had a colored pin the Lab filter couldn't find — the filter
+    // "worked" on the map pin but dropped the office from list/map/route.
+    const sts=statusSet(o,true); if(!sts.some(s=>state.gLab.indexOf(s)>=0))return false;
   }
   return true;
 }
@@ -1677,7 +1737,12 @@ function renderInner(){
   // a search must never zero these out. Tapping a dial still filters the list.
   const labBase=DB.filter(labDialPass);
   const lc={active:0,"new":0,winback:0,falloff:0,inactive:0};
-  labBase.forEach(o=>{ labStatuses(o).forEach(st=>{ if(st in lc) lc[st]++; }); });
+  // Count per DOCTOR via the 📊 LAB note lines (matches the Lab Dashboard's
+  // Bridge totals); an office with a status column but no note lines still
+  // counts once, so the dials and the pins can never disagree.
+  labBase.forEach(o=>{ const ls=labStatuses(o);
+    if(ls.length){ ls.forEach(st=>{ if(st in lc) lc[st]++; }); }
+    else { const e=effStatus(o); if(e in lc) lc[e]++; } });
   ['active','new','winback','falloff','inactive'].forEach(k=>{ const el=document.getElementById('lc_'+k); if(el) el.textContent=lc[k].toLocaleString(); });
   const lsn=document.getElementById('labScopeNote');
   if(lsn){ const sc=labScope();
@@ -2208,7 +2273,7 @@ function popupHTML(o){
   return `<div class="popup-nm">${esc(o.name)}</div>
     <a class="popup-ad" href="${mapAppleLink(o)}" target="_blank" rel="noopener" style="text-decoration:none;display:block;">${esc(o.addr)}, ${esc(o.city)}</a>
     ${dist}
-    ${labStatus(o)?`<div style="margin:2px 0 4px;">${labChip(o)}</div>`:''}
+    ${effStatus(o)?`<div style="margin:2px 0 4px;">${labChip(o)}</div>`:''}
     ${scOn?`<span class="popup-sc">${esc(o.scanner)}</span>`:''}
     ${noteBlock}
     <textarea class="popup-quick" id="pq_${o.id}" placeholder="Add a quick note…"></textarea>
@@ -2943,7 +3008,7 @@ function openDetail(id){
       <a class="maplink" href="${mapAppleLink(o)}" target="_blank" rel="noopener">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg> Apple Maps</a>
     </div>
-    ${labStatus(o)?`<div style="margin:10px 2px 2px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;">${labChip(o)}<span style="font-size:11px;color:#5c7370;flex:1 1 100%;">Lab pipeline status — updated by the daily import</span></div>`:''}
+    ${effStatus(o)?`<div style="margin:10px 2px 2px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;">${labChip(o)}<span style="font-size:11px;color:#5c7370;flex:1 1 100%;">Lab pipeline status — per doctor, updated by the daily import</span></div>`:''}
     <div class="dgrid">
       <div class="dcard full"><div class="dl">Address</div><a class="dv" href="${mapAppleLink(o)}" target="_blank" rel="noopener">${esc(o.addr)}, ${esc(o.city)}, IL ${esc(o.zip)}</a></div>
       <div class="dcard"><div class="dl">Phone</div>${o.phone?`<a class="dv" href="tel:${esc(o.phone)}">${esc(o.phone)}</a>`:'<div class="dv" style="color:var(--ink-faint)">—</div>'}</div>
@@ -3827,6 +3892,17 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
   // Paint whatever is in the offline cache immediately, so the app is never blank
   // while the network round-trip is in flight.
   rebuild(); render();
+
+  /* Open on the map, centred on the rep, in follow mode. Deliberately AFTER the
+     first render rather than by defaulting state.view to "map": the map container
+     does not exist until render() has run once, so setting it up front threw and
+     left the app on its loading message. */
+  setTimeout(() => {
+    try {
+      if (state.view !== "map") setView("map");
+      if (typeof startFollow === "function") startFollow();
+    } catch (e) { console.warn("open-on-map:", e); }
+  }, 350);
 
   // Decide what to show, in priority order:
   //   1. No keys saved at all  -> "Not connected" (paste URL + key)
