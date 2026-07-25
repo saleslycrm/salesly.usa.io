@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA84 v84</title>
+<title>Salesly VDA87 v87</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1710,6 +1710,9 @@ function poolMatch(o){
 /* ---------- render ---------- */
 function render(){
   if(_loginLock) return;   // login screen is up — do not overwrite it
+  // Cheap when nothing changed (signature-guarded): keeps the live-route bar AND
+  // its on-map overlay alive once offices finish loading after a cold start.
+  try{ renderRouteBar(); }catch(_){}
   try{ renderInner(); }
   catch(err){
     try{ console.error("renderInner failed:", err); }catch(_){}
@@ -2347,6 +2350,7 @@ function centerOnMarker(m){
 // route panel list and handed to Apple Maps for navigation. These remain as
 // safe no-ops so existing call sites don't error.
 function clearRouteOverlay(){
+  window._routeDrawToken=(window._routeDrawToken||0)+1;   // cancel any in-flight road-geometry upgrade
   if(routeLayer){ try{ mapObj.removeLayer(routeLayer); }catch(e){} routeLayer=null; }
   const cb=document.getElementById('clearRoute'); if(cb) cb.style.display='none';
 }
@@ -2407,9 +2411,34 @@ function routeCheckoff(officeId){
 }
 function renderRouteBar(){
   const bar=document.getElementById('routeBar'); if(!bar) return;
-  if(!activeRoute||!activeRoute.active){ bar.style.display='none'; return; }
+  if(!activeRoute||!activeRoute.active){
+    bar.style.display='none';
+    // Route over → take the overlay down with it (guarded: never touch a route
+    // the planner sheet just drew for a NEW route being built).
+    if(window._liveRouteSig){ window._liveRouteSig=""; try{ clearRouteOverlay(); }catch(e){} }
+    return;
+  }
   const rem=routeRemaining();
   if(!rem.length){ bar.style.display='none'; return; }
+  // ---- Keep the on-map route ALIVE across reloads ----
+  // The teal line + numbered pins were only ever drawn once, at plot time in the
+  // sheet. Any reload — iOS evicting the page during Apple Maps navigation, or
+  // the auto-updater swapping in a new build — silently erased them, leaving
+  // just this bar. The stops live in localStorage, so redraw the overlay from
+  // the saved route whenever it's missing or the remaining stops changed
+  // (a check-off redraws with the completed stop removed).
+  const sig=rem.join(',');
+  if(sig!==window._liveRouteSig && mapObj){
+    const ordered=rem.map(id=>DB.find(x=>x.id===id)).filter(o=>o&&o.lat&&o.lng);
+    if(ordered.length){
+      window._liveRouteSig=sig;
+      // noFit: these are background keep-alive redraws (boot restore, visit
+      // check-offs). They must repaint the line WITHOUT moving the map — the
+      // re-framing on every check-off was yanking reps out of follow view.
+      // Only explicitly plotting a route in the sheet frames the map.
+      try{ drawRouteOverlay(ordered, userPos?userPos.lat:null, userPos?userPos.lng:null, {noFit:true}); }catch(e){}
+    }
+  }
   const nextO=DB.find(o=>o.id===rem[0]);
   const nm=nextO?(nextO.name||'(no name)'):'—';
   const city=nextO&&nextO.city?(' — '+nextO.city):'';
@@ -2464,7 +2493,7 @@ function optimizeOrderORS(stops, startLat, startLng, anchorMode){
 // Draw the planned route on the map: numbered pins in order + a line. The line
 // follows actual ROADS via OpenRouteService when a key is set; if the service is
 // unreachable or no key, it falls back to a straight line so it never breaks.
-function _drawRouteBase(coordsLatLng, ordered){
+function _drawRouteBase(coordsLatLng, ordered, noFit){
   routeLayer=L.layerGroup();
   L.polyline(coordsLatLng,{color:'#0e6a73',weight:9,opacity:.55,lineCap:'round',lineJoin:'round'}).addTo(routeLayer); // casing
   L.polyline(coordsLatLng,{color:'#23bfcd',weight:5,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(routeLayer); // main
@@ -2478,19 +2507,27 @@ function _drawRouteBase(coordsLatLng, ordered){
   });
   routeLayer.addTo(mapObj);
   const cb=document.getElementById('clearRoute'); if(cb) cb.style.display='block';
-  try{ mapObj.fitBounds(L.latLngBounds(coordsLatLng),{padding:[60,60],maxZoom:15}); }catch(e){}
+  // noFit = the silent road-geometry upgrade: same route, better line — don't
+  // move the user's view a second time for it.
+  if(!noFit){ try{ mapObj.fitBounds(L.latLngBounds(coordsLatLng),{padding:[60,60],maxZoom:15}); }catch(e){} }
 }
-function drawRouteOverlay(ordered, startLat, startLng){
+function drawRouteOverlay(ordered, startLat, startLng, opts){
   if(!mapObj) return;
+  const noFit=!!(opts&&opts.noFit);
   clearRouteOverlay();
   const pts=(ordered||[]).filter(o=>o&&o.lat&&o.lng);
   if(!pts.length) return;
-  // straight-line waypoints (used directly as fallback, and as the marker order)
+  // straight-line waypoints (drawn immediately, and used as the marker order)
   const straight=pts.map(o=>[+o.lat,+o.lng]);
   if(startLat!=null && startLng!=null) straight.unshift([+startLat,+startLng]);
+  // DRAW NOW: the straight line appears instantly — no waiting on the routing
+  // service. The road-following geometry then swaps in underneath when (and if)
+  // ORS answers. Previously nothing was drawn until the ORS round-trip finished,
+  // which is why the route took seconds to appear after plotting or reopening.
+  _drawRouteBase(straight, pts, noFit);
+  const myToken=(window._routeDrawToken=(window._routeDrawToken||0)+1);
   // Build ORS waypoints as [lng,lat]
   const orsCoords=straight.map(c=>[c[1],c[0]]);
-  // Try road-following first; fall back to straight line on any failure.
   if(ORS_KEY && orsCoords.length>=2 && orsCoords.length<=50){
     const body=JSON.stringify({coordinates:orsCoords});
     fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
@@ -2498,12 +2535,12 @@ function drawRouteOverlay(ordered, startLat, startLng){
       headers:{"Authorization":ORS_KEY,"Content-Type":"application/json"},
       body
     }).then(r=>r.ok?r.json():Promise.reject(r.status)).then(geo=>{
+      // A clear/redraw may have happened while ORS was thinking — never let a
+      // stale response resurrect a route the user cleared or replaced.
+      if(myToken!==window._routeDrawToken) return;
       const line=geo&&geo.features&&geo.features[0]&&geo.features[0].geometry&&geo.features[0].geometry.coordinates;
-      if(line&&line.length){ _drawRouteBase(line.map(c=>[c[1],c[0]]), pts); }
-      else { _drawRouteBase(straight, pts); }
-    }).catch(()=>{ _drawRouteBase(straight, pts); });  // network/quota/key issue -> straight line
-  } else {
-    _drawRouteBase(straight, pts);
+      if(line&&line.length){ clearRouteOverlay(); _drawRouteBase(line.map(c=>[c[1],c[0]]), pts, true); }
+    }).catch(()=>{});  // network/quota/key issue → the straight line already drawn stays
   }
 }
 // Inline onclick inside a Leaflet popup is unreliable, so bind real listeners on popupopen.
@@ -3828,8 +3865,12 @@ function wire(){
   on('locateBtn','click',locateMe);
   on('nearbyBtn','click',toggleNearby);
   on('routeBtn','click',openRoute);
-  on('clearRoute','click',clearRouteOverlay);
-  on('rb_end','click',endLiveRoute);
+  // "✕ Clear route" means GONE: end the live route (clears localStorage + the
+  // bar) AND remove the overlay. Clearing only the pixels left the route active,
+  // so the keep-alive redraw brought it right back on the next check-off,
+  // render, or reopen — the only escape was force-closing the app.
+  on('clearRoute','click',()=>{ try{ endLiveRoute(); }catch(e){} clearRouteOverlay(); });
+  on('rb_end','click',()=>{ endLiveRoute(); clearRouteOverlay(); });
   { const h=document.getElementById('rb_head'), endBtn=document.getElementById('rb_end');
     if(endBtn) endBtn.addEventListener('click',e=>e.stopPropagation());  // End shouldn't toggle
     if(h) h.addEventListener('click',()=>{
@@ -3945,6 +3986,9 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
       if (state.view !== "map") setView("map");
       if (typeof startFollow === "function") startFollow();
     } catch (e) { console.warn("open-on-map:", e); }
+    // Map exists NOW — if a live route was in progress before the reload, put
+    // its overlay back immediately instead of waiting for the next render tick.
+    try { renderRouteBar(); } catch (e) {}
     // Map view is up and follow has been requested — give the container/tiles a
     // beat to paint behind the splash, then fade it away onto the live map.
     setTimeout(hideSplash, 650);
@@ -4137,11 +4181,17 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
     if(!server || server === RUNNING) return;
     // Only ever reload ONCE per version per session — no update loops.
     try{ if(sessionStorage.getItem(SEEN_KEY) === server) return; }catch(_){}
-    try{ sessionStorage.setItem(SEEN_KEY, server); }catch(_){}
-    // Don't yank the page out from under someone mid-edit; retry shortly.
+    // Don't yank the page out from under someone mid-edit — and NEVER mid-route:
+    // a reload erases nothing permanent, but swapping builds while a rep is
+    // driving a live route is exactly the wrong moment. Defer and retry; the
+    // update applies on the next quiet check after the route wraps up.
     const busy = document.body.classList.contains("sheet-open") ||
-                 (typeof _popupOpen !== "undefined" && _popupOpen);
+                 (typeof _popupOpen !== "undefined" && _popupOpen) ||
+                 (typeof activeRoute !== "undefined" && activeRoute && activeRoute.active);
     if(busy){ setTimeout(check, 20000); return; }
+    // Mark as seen only when actually reloading — the old code marked BEFORE the
+    // busy check, so a deferred update was then skipped forever this session.
+    try{ sessionStorage.setItem(SEEN_KEY, server); }catch(_){}
     try{ if(typeof toast === "function") toast("Updating to " + server + "…", true); }catch(_){}
     setTimeout(function(){ location.replace(location.pathname + "?b=" + server); }, 700);
   }
