@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA88 v88</title>
+<title>Salesly VDA90 v90</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -2519,56 +2519,115 @@ function _drawRouteBase(coordsLatLng, ordered, noFit){
   // move the user's view a second time for it.
   if(!noFit){ try{ mapObj.fitBounds(L.latLngBounds(coordsLatLng),{padding:[60,60],maxZoom:15}); }catch(e){} }
 }
+/* ---- Road geometry: get a real driving line through the waypoints ----
+   Three tiers, first success wins:
+     1. ORS with radiuses:-1  → snaps every stop to the nearest road no matter
+        how far off-road its geocode landed. A single unroutable stop used to
+        fail the WHOLE request (that's why entire routes drew as straight
+        chords); with unlimited snap radius that can't happen.
+     2. OSRM public server    → no key, different backend, covers ORS key/quota
+        or outage problems.
+     3. Leg-by-leg via OSRM   → stitch each hop separately, so one impossible
+        pair degrades to a straight line for THAT hop only, not the whole route.
+   Always resolves to [[lat,lng],…] or null. Never throws. */
+function fetchRoadGeometry(wpLatLng){
+  const toLngLat=c=>[c[1],c[0]];
+  function viaORS(){
+    if(!ORS_KEY) return Promise.reject("no-key");
+    return fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
+      method:"POST",
+      headers:{"Authorization":ORS_KEY,"Content-Type":"application/json"},
+      body:JSON.stringify({
+        coordinates: wpLatLng.map(toLngLat),
+        radiuses: wpLatLng.map(function(){ return -1; }),   // -1 = snap to nearest road, no cap
+        continue_straight: false
+      })
+    }).then(function(r){ return r.ok ? r.json() : Promise.reject("ORS "+r.status); })
+      .then(function(geo){
+        var f = geo && geo.features && geo.features[0];
+        var line = f && f.geometry && f.geometry.coordinates;
+        if(!line || line.length<2) return Promise.reject("ORS empty");
+        return line.map(function(c){ return [c[1],c[0]]; });
+      });
+  }
+  function osrmPath(list){
+    return list.map(function(c){ return c[1]+","+c[0]; }).join(";");
+  }
+  function viaOSRM(list){
+    return fetch("https://router.project-osrm.org/route/v1/driving/"+osrmPath(list)+"?overview=full&geometries=geojson")
+      .then(function(r){ return r.ok ? r.json() : Promise.reject("OSRM "+r.status); })
+      .then(function(j){
+        var rt = j && j.routes && j.routes[0];
+        var line = rt && rt.geometry && rt.geometry.coordinates;
+        if(!line || line.length<2) return Promise.reject("OSRM empty");
+        return line.map(function(c){ return [c[1],c[0]]; });
+      });
+  }
+  function viaLegs(){
+    var jobs=[];
+    for(var i=0;i<wpLatLng.length-1;i++){
+      (function(a,b){
+        jobs.push(viaOSRM([a,b]).catch(function(){ return [a,b]; }));  // that hop only → straight
+      })(wpLatLng[i], wpLatLng[i+1]);
+    }
+    return Promise.all(jobs).then(function(legs){
+      var out=[];
+      legs.forEach(function(leg,idx){
+        if(idx>0) leg=leg.slice(1);          // don't duplicate the shared node
+        out=out.concat(leg);
+      });
+      return out.length>=2 ? out : null;
+    });
+  }
+  return viaORS()
+    .catch(function(){ return viaOSRM(wpLatLng); })
+    .catch(function(){ return viaLegs(); })
+    .catch(function(){ return null; });
+}
 function drawRouteOverlay(ordered, startLat, startLng, opts){
   if(!mapObj) return;
   const noFit=!!(opts&&opts.noFit);
   clearRouteOverlay();
   const pts=(ordered||[]).filter(o=>o&&o.lat&&o.lng);
   if(!pts.length) return;
-  // straight-line waypoints (drawn immediately, and used as the marker order)
-  const straight=pts.map(o=>[+o.lat,+o.lng]);
-  if(startLat!=null && startLng!=null) straight.unshift([+startLat,+startLng]);
-  // DRAW NOW: the straight line appears instantly — no waiting on the routing
-  // service. The road-following geometry then swaps in underneath when (and if)
-  // ORS answers. Previously nothing was drawn until the ORS round-trip finished,
-  // which is why the route took seconds to appear after plotting or reopening.
-  _drawRouteBase(straight, pts, noFit);
+
+  // ONE canonical waypoint list, in pin order, GPS start prepended if present.
+  // BOTH the instant straight line AND the road request are built from this exact
+  // list — so the road line can never trace a different order than the numbered
+  // pins (that mismatch was what produced straight chords on some legs).
+  const wpLatLng=pts.map(o=>[+o.lat,+o.lng]);
+  if(startLat!=null && startLng!=null) wpLatLng.unshift([+startLat,+startLng]);
+
+  // Draw the straight line immediately so there's never a blank wait.
+  _drawRouteBase(wpLatLng, pts, noFit);
+
   const myToken=(window._routeDrawToken=(window._routeDrawToken||0)+1);
-  // Remember this draw so a later resume can re-request the road geometry if
-  // the upgrade fetch below gets killed (iOS suspends in-flight requests the
-  // moment the app backgrounds — e.g. right as we hand off to Apple Maps).
   window._lastRouteDraw={o:pts.slice(), a:startLat, b:startLng};
   window._routeNeedsUpgrade=false;
-  // Build ORS waypoints as [lng,lat]
-  const orsCoords=straight.map(c=>[c[1],c[0]]);
-  if(ORS_KEY && orsCoords.length>=2 && orsCoords.length<=50){
-    window._routeNeedsUpgrade=true;
-    const body=JSON.stringify({coordinates:orsCoords});
-    fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
-      method:"POST",
-      headers:{"Authorization":ORS_KEY,"Content-Type":"application/json"},
-      body
-    }).then(r=>r.ok?r.json():Promise.reject(r.status)).then(geo=>{
-      // A clear/redraw may have happened while ORS was thinking — never let a
-      // stale response resurrect a route the user cleared or replaced.
-      if(myToken!==window._routeDrawToken) return;
-      const line=geo&&geo.features&&geo.features[0]&&geo.features[0].geometry&&geo.features[0].geometry.coordinates;
-      if(line&&line.length){
-        const keep=window._lastRouteDraw;                 // clearRouteOverlay wipes these — restore after
-        clearRouteOverlay(); _drawRouteBase(line.map(c=>[c[1],c[0]]), pts, true);
-        window._lastRouteDraw=keep; window._routeNeedsUpgrade=false;
-      }
-    }).catch(()=>{ /* killed/quota/offline → straight stays; resume hook retries */ });
-  }
+
+  if(!ORS_KEY && wpLatLng.length<2) return;
+  if(wpLatLng.length<2 || wpLatLng.length>50) return;   // straight line stands
+  window._routeNeedsUpgrade=true;
+
+  fetchRoadGeometry(wpLatLng).then(function(roadLatLng){
+    if(myToken!==window._routeDrawToken) return;        // superseded by a newer draw/clear
+    if(!roadLatLng || roadLatLng.length<2){
+      // Every tier failed (offline / suspended mid-flight). Straight line stays;
+      // the resume hook retries when we're foregrounded again.
+      return;
+    }
+    var keep=window._lastRouteDraw;                     // clearRouteOverlay wipes these
+    clearRouteOverlay();
+    _drawRouteBase(roadLatLng, pts, true);              // road line + pins, no re-fit
+    window._lastRouteDraw=keep; window._routeNeedsUpgrade=false;
+  });
 }
-// The road-geometry request is best-effort and dies whenever iOS suspends the
-// app mid-flight. Whenever we come back to the foreground with a route drawn
-// whose upgrade never landed, quietly re-request it. Throttled; a no-op when
-// the line is already road-following or the route is gone.
+// The road-geometry request dies whenever iOS suspends the app mid-flight. On
+// return to foreground, re-request for any route still on a straight line.
 window._routeHealAt=0;
 function healRouteGeometry(){
   if(!window._routeNeedsUpgrade || !routeLayer || !window._lastRouteDraw) return;
-  if(Date.now()-window._routeHealAt<5000) return;
+  if(Date.now()-window._routeHealAt<4000) return;
   window._routeHealAt=Date.now();
   const d=window._lastRouteDraw;
   try{ drawRouteOverlay(d.o, d.a, d.b, {noFit:true}); }catch(e){}
@@ -3538,7 +3597,7 @@ function computeOrdered(){
       ? "Routing from your chosen office through the nearest offices around it."
       : (haveGPS?"Routing from your current location. Or search an office above to anchor the route there."
                 :"Tip: tap the locate button on the map to start from where you are, or search an office above to anchor the route.");
-    $('rt_apple').onclick=()=>{ const u=routeAppleURL(ordered,sLat,sLng); startLiveRoute(ordered); if(u){ try{ location.href=u; }catch(e){ window.open(u,'_blank'); } } };
+    $('rt_apple').onclick=()=>{ const u=routeAppleURL(ordered,sLat,sLng); window._mapsHandoffAt=Date.now(); startLiveRoute(ordered); if(u){ try{ location.href=u; }catch(e){ window.open(u,'_blank'); } } };
     }
   }
   function showAnchorChip(){
@@ -4214,13 +4273,17 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
     if(!server || server === RUNNING) return;
     // Only ever reload ONCE per version per session — no update loops.
     try{ if(sessionStorage.getItem(SEEN_KEY) === server) return; }catch(_){}
-    // Don't yank the page out from under someone mid-edit — and NEVER mid-route:
-    // a reload erases nothing permanent, but swapping builds while a rep is
-    // driving a live route is exactly the wrong moment. Defer and retry; the
-    // update applies on the next quiet check after the route wraps up.
+    // Don't interrupt an open editing sheet, or the split-second Apple Maps
+    // handoff. An active route is NO LONGER a blocker: VDA88+ redraws the live
+    // route (and heals its road geometry) after any reload, so updating
+    // mid-route is safe — the route is right back on the map a second later.
+    // Blocking on the whole route was why phones sat stuck on an old build for
+    // an entire drive.
+    const handoff = (typeof _mapsHandoffAt !== "undefined") &&
+                    _mapsHandoffAt && (Date.now() - _mapsHandoffAt < 15000);
     const busy = document.body.classList.contains("sheet-open") ||
                  (typeof _popupOpen !== "undefined" && _popupOpen) ||
-                 (typeof activeRoute !== "undefined" && activeRoute && activeRoute.active);
+                 handoff;
     if(busy){ setTimeout(check, 20000); return; }
     // Mark as seen only when actually reloading — the old code marked BEFORE the
     // busy check, so a deferred update was then skipped forever this session.
