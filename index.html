@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA92 v92</title>
+<title>Salesly VDA93 v93</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -2642,6 +2642,32 @@ function fetchRoadGeometry(wpLatLng){
       return geo;
     });
 }
+/* ---- Request de-duplication ----
+   The road line is requested from three places (plotting, keep-alive redraws,
+   resume heal). Without this they can fire several identical requests within
+   seconds and trip the routing service's per-minute rate limit — after which
+   everything returns 429 and every route draws straight. That is why routes
+   "worked once, then never again". Now: one in-flight request per route, and a
+   short cool-down after a failure before the same route is retried. */
+window._rgeoPending = window._rgeoPending || {};
+window._rgeoFailAt  = window._rgeoFailAt  || {};
+function fetchRoadGeometryOnce(sig, wpLatLng){
+  if(window._rgeoPending[sig]) return window._rgeoPending[sig];      // already asking
+  var failedAt=window._rgeoFailAt[sig]||0;
+  if(Date.now()-failedAt < 45000) return Promise.resolve(null);       // cooling down
+  var p = fetchRoadGeometry(wpLatLng).then(function(geo){
+    delete window._rgeoPending[sig];
+    if(!geo) window._rgeoFailAt[sig]=Date.now();
+    else delete window._rgeoFailAt[sig];
+    return geo;
+  }, function(){
+    delete window._rgeoPending[sig];
+    window._rgeoFailAt[sig]=Date.now();
+    return null;
+  });
+  window._rgeoPending[sig]=p;
+  return p;
+}
 function drawRouteOverlay(ordered, startLat, startLng, opts){
   if(!mapObj) return;
   const noFit=!!(opts&&opts.noFit);
@@ -2680,7 +2706,7 @@ function drawRouteOverlay(ordered, startLat, startLng, opts){
   if(wpLatLng.length<2 || wpLatLng.length>50) return;   // straight line stands
   window._routeNeedsUpgrade=true;
 
-  fetchRoadGeometry(wpLatLng).then(function(roadLatLng){
+  fetchRoadGeometryOnce(sig, wpLatLng).then(function(roadLatLng){
     if(myToken!==window._routeDrawToken){ return; }     // superseded by a newer draw/clear
     if(!roadLatLng || roadLatLng.length<2){
       // Every tier failed (offline / suspended mid-flight). Straight line stays.
