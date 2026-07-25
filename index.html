@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA87 v87</title>
+<title>Salesly VDA88 v88</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -2351,6 +2351,7 @@ function centerOnMarker(m){
 // safe no-ops so existing call sites don't error.
 function clearRouteOverlay(){
   window._routeDrawToken=(window._routeDrawToken||0)+1;   // cancel any in-flight road-geometry upgrade
+  window._lastRouteDraw=null; window._routeNeedsUpgrade=false;  // and any pending resume-heal
   if(routeLayer){ try{ mapObj.removeLayer(routeLayer); }catch(e){} routeLayer=null; }
   const cb=document.getElementById('clearRoute'); if(cb) cb.style.display='none';
 }
@@ -2374,6 +2375,13 @@ function startLiveRoute(stops){
   const ids=(stops||[]).map(o=>o.id).filter(Boolean);
   if(ids.length<2){ activeRoute=null; saveRoute(); renderRouteBar(); return; }
   activeRoute={stops:ids, done:[], active:true};
+  // The planner sheet has ALREADY drawn this exact route (road-following line).
+  // Mark it as current so renderRouteBar doesn't repaint it straight-line-first
+  // right as we hand off to Apple Maps — iOS suspends the page at that instant
+  // and kills the in-flight road-geometry request, which stranded reps on
+  // connect-the-dots lines. If no overlay exists (edge case), leave the
+  // signature empty so the keep-alive draws it normally.
+  window._liveRouteSig = routeLayer ? ids.join(',') : "";
   saveRoute(); renderRouteBar();
 }
 function endLiveRoute(){ activeRoute=null; saveRoute(); renderRouteBar(); }
@@ -2526,9 +2534,15 @@ function drawRouteOverlay(ordered, startLat, startLng, opts){
   // which is why the route took seconds to appear after plotting or reopening.
   _drawRouteBase(straight, pts, noFit);
   const myToken=(window._routeDrawToken=(window._routeDrawToken||0)+1);
+  // Remember this draw so a later resume can re-request the road geometry if
+  // the upgrade fetch below gets killed (iOS suspends in-flight requests the
+  // moment the app backgrounds — e.g. right as we hand off to Apple Maps).
+  window._lastRouteDraw={o:pts.slice(), a:startLat, b:startLng};
+  window._routeNeedsUpgrade=false;
   // Build ORS waypoints as [lng,lat]
   const orsCoords=straight.map(c=>[c[1],c[0]]);
   if(ORS_KEY && orsCoords.length>=2 && orsCoords.length<=50){
+    window._routeNeedsUpgrade=true;
     const body=JSON.stringify({coordinates:orsCoords});
     fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
       method:"POST",
@@ -2539,10 +2553,29 @@ function drawRouteOverlay(ordered, startLat, startLng, opts){
       // stale response resurrect a route the user cleared or replaced.
       if(myToken!==window._routeDrawToken) return;
       const line=geo&&geo.features&&geo.features[0]&&geo.features[0].geometry&&geo.features[0].geometry.coordinates;
-      if(line&&line.length){ clearRouteOverlay(); _drawRouteBase(line.map(c=>[c[1],c[0]]), pts, true); }
-    }).catch(()=>{});  // network/quota/key issue → the straight line already drawn stays
+      if(line&&line.length){
+        const keep=window._lastRouteDraw;                 // clearRouteOverlay wipes these — restore after
+        clearRouteOverlay(); _drawRouteBase(line.map(c=>[c[1],c[0]]), pts, true);
+        window._lastRouteDraw=keep; window._routeNeedsUpgrade=false;
+      }
+    }).catch(()=>{ /* killed/quota/offline → straight stays; resume hook retries */ });
   }
 }
+// The road-geometry request is best-effort and dies whenever iOS suspends the
+// app mid-flight. Whenever we come back to the foreground with a route drawn
+// whose upgrade never landed, quietly re-request it. Throttled; a no-op when
+// the line is already road-following or the route is gone.
+window._routeHealAt=0;
+function healRouteGeometry(){
+  if(!window._routeNeedsUpgrade || !routeLayer || !window._lastRouteDraw) return;
+  if(Date.now()-window._routeHealAt<5000) return;
+  window._routeHealAt=Date.now();
+  const d=window._lastRouteDraw;
+  try{ drawRouteOverlay(d.o, d.a, d.b, {noFit:true}); }catch(e){}
+}
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") healRouteGeometry(); });
+window.addEventListener("pageshow", healRouteGeometry);
+window.addEventListener("online", healRouteGeometry);
 // Inline onclick inside a Leaflet popup is unreliable, so bind real listeners on popupopen.
 function wirePopup(e){
   const el = (e.popup && e.popup.getElement) ? e.popup.getElement() : null;
