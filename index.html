@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#0f3d36">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Salesly v80</title>
+<title>Salesly v81</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1127,7 +1127,7 @@ async function cloudLoadReps(){
 }
 
 let PRAC_OPEN=new Set();
-let DB=[], state={tab:"city",filter:[],q:"",openCity:null,view:"map",dFrom:"",dTo:"",expand:"",repFilter:[],
+let DB=[], state={tab:"city",filter:[],q:"",openCity:null,view:"list",dFrom:"",dTo:"",expand:"",repFilter:[],
   gVisit:"",        // "" | "visited" | "unvisited" | "mine"  (stackable group)
   gStatus:"",       // "" | "active" | "inactive"            (stackable group)
   gHeat:[],         // subset of ["green","yellow","red"] — OR within the group
@@ -1169,6 +1169,7 @@ function freshSession(){
     state.gVisit=""; state.gStatus=""; state.gHeat=[]; state.gLab=[]; state.filter=[];
     state.q=""; const sb=document.getElementById('q'); if(sb) sb.value="";
     if(state.view!=="map") setView("map");
+    try{ startFollow && startFollow(); }catch(e){}
     _lastBox="";                                  // force a viewport re-pull
     if(typeof recenterOnUser==="function") recenterOnUser();
     else if(mapObj && userPos) mapObj.setView([userPos.lat,userPos.lng], 13);
@@ -3827,6 +3828,17 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
   // Paint whatever is in the offline cache immediately, so the app is never blank
   // while the network round-trip is in flight.
   rebuild(); render();
+
+  /* Open on the map, centred on the rep, in follow mode. Deliberately AFTER the
+     first render rather than by defaulting state.view to "map": the map container
+     does not exist until render() has run once, so setting it up front threw and
+     left the app on its loading message. */
+  setTimeout(() => {
+    try {
+      if (state.view !== "map") setView("map");
+      if (typeof startFollow === "function") startFollow();
+    } catch (e) { console.warn("open-on-map:", e); }
+  }, 350);
 
   // Decide what to show, in priority order:
   //   1. No keys saved at all  -> "Not connected" (paste URL + key)
