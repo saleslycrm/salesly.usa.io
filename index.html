@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA90 v90</title>
+<title>Salesly VDA91 v91</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -2519,6 +2519,29 @@ function _drawRouteBase(coordsLatLng, ordered, noFit){
   // move the user's view a second time for it.
   if(!noFit){ try{ mapObj.fitBounds(L.latLngBounds(coordsLatLng),{padding:[60,60],maxZoom:15}); }catch(e){} }
 }
+/* ---- Road geometry cache ----
+   Once we successfully get a road line for a set of waypoints we KEEP it.
+   Replotting the same stops, returning from Apple Maps, reloading, or a build
+   update all redraw from this cache with zero network calls — so a route that
+   drew correctly once can never silently degrade back to straight chords
+   because a later request failed. Keyed on waypoints rounded to ~110m, so
+   normal GPS drift still hits the cache. Newest 6 routes kept. */
+var RGEO_KEY="sl_roadgeo_v1";
+function rgeoSig(wp){ return wp.map(function(c){ return (+c[0]).toFixed(3)+","+(+c[1]).toFixed(3); }).join("|"); }
+function rgeoAll(){ try{ return JSON.parse(localStorage.getItem(RGEO_KEY)||"{}"); }catch(e){ return {}; } }
+function rgeoGet(sig){
+  var m=rgeoAll(), e=m[sig];
+  return (e && e.g && e.g.length>1) ? e.g : null;
+}
+function rgeoPut(sig, geo){
+  try{
+    var m=rgeoAll();
+    m[sig]={ t:Date.now(), g:geo.map(function(c){ return [+(+c[0]).toFixed(5), +(+c[1]).toFixed(5)]; }) };
+    var keys=Object.keys(m).sort(function(a,b){ return (m[b].t||0)-(m[a].t||0); }).slice(0,6);
+    var out={}; keys.forEach(function(k){ out[k]=m[k]; });
+    localStorage.setItem(RGEO_KEY, JSON.stringify(out));
+  }catch(e){ /* storage full/private mode — cache is optional */ }
+}
 /* ---- Road geometry: get a real driving line through the waypoints ----
    Three tiers, first success wins:
      1. ORS with radiuses:-1  → snaps every stop to the nearest road no matter
@@ -2564,24 +2587,41 @@ function fetchRoadGeometry(wpLatLng){
       });
   }
   function viaLegs(){
-    var jobs=[];
+    var jobs=[], okCount=0;
     for(var i=0;i<wpLatLng.length-1;i++){
       (function(a,b){
-        jobs.push(viaOSRM([a,b]).catch(function(){ return [a,b]; }));  // that hop only → straight
+        jobs.push(
+          viaOSRM([a,b])
+            .then(function(g){ okCount++; return g; })
+            .catch(function(){ return [a,b]; })   // that hop only → straight
+        );
       })(wpLatLng[i], wpLatLng[i+1]);
     }
     return Promise.all(jobs).then(function(legs){
+      // If NOT ONE leg actually routed we're simply offline — reject so the
+      // caller keeps the straight line and RETRIES later. Returning the
+      // fabricated straight legs here would have been cached as if it were real
+      // road geometry, permanently freezing that route on straight chords.
+      if(!okCount) return Promise.reject("all legs failed");
       var out=[];
       legs.forEach(function(leg,idx){
         if(idx>0) leg=leg.slice(1);          // don't duplicate the shared node
         out=out.concat(leg);
       });
-      return out.length>=2 ? out : null;
+      return out.length>=2 ? out : Promise.reject("legs empty");
     });
   }
   return viaORS()
     .catch(function(){ return viaOSRM(wpLatLng); })
     .catch(function(){ return viaLegs(); })
+    .catch(function(){
+      // One retry pass — transient failures are common right after iOS wakes
+      // the app (radio not ready yet).
+      return new Promise(function(res){ setTimeout(res, 1500); })
+        .then(function(){ return viaORS(); })
+        .catch(function(){ return viaOSRM(wpLatLng); })
+        .catch(function(){ return null; });
+    })
     .catch(function(){ return null; });
 }
 function drawRouteOverlay(ordered, startLat, startLng, opts){
@@ -2605,21 +2645,40 @@ function drawRouteOverlay(ordered, startLat, startLng, opts){
   window._lastRouteDraw={o:pts.slice(), a:startLat, b:startLng};
   window._routeNeedsUpgrade=false;
 
-  if(!ORS_KEY && wpLatLng.length<2) return;
+  // CACHE HIT → draw the real road line right now. No straight-line flash, no
+  // network call. This is what makes a route that drew correctly once stay
+  // correct through Apple Maps hand-offs, reloads, updates, and replots.
+  const sig=rgeoSig(wpLatLng);
+  const cached=rgeoGet(sig);
+  if(cached){
+    clearRouteOverlay();
+    _drawRouteBase(cached, pts, noFit);
+    window._routeDrawToken=myToken;                    // this draw is current
+    window._lastRouteDraw={o:pts.slice(), a:startLat, b:startLng};
+    window._routeNeedsUpgrade=false;
+    return;
+  }
+
   if(wpLatLng.length<2 || wpLatLng.length>50) return;   // straight line stands
   window._routeNeedsUpgrade=true;
 
   fetchRoadGeometry(wpLatLng).then(function(roadLatLng){
-    if(myToken!==window._routeDrawToken) return;        // superseded by a newer draw/clear
+    if(myToken!==window._routeDrawToken){ return; }     // superseded by a newer draw/clear
     if(!roadLatLng || roadLatLng.length<2){
-      // Every tier failed (offline / suspended mid-flight). Straight line stays;
-      // the resume hook retries when we're foregrounded again.
+      // Every tier failed (offline / suspended mid-flight). Straight line stays.
+      // Set the retry flag EXPLICITLY here — clearRouteOverlay() resets it, and
+      // relying on it surviving from before the fetch meant a failed upgrade was
+      // never retried on resume.
+      window._routeNeedsUpgrade=true;
+      window._lastRouteDraw={o:pts.slice(), a:startLat, b:startLng};
       return;
     }
-    var keep=window._lastRouteDraw;                     // clearRouteOverlay wipes these
+    rgeoPut(sig, roadLatLng);                           // remember it — never fetch this route again
     clearRouteOverlay();
     _drawRouteBase(roadLatLng, pts, true);              // road line + pins, no re-fit
-    window._lastRouteDraw=keep; window._routeNeedsUpgrade=false;
+    window._routeDrawToken=myToken;
+    window._lastRouteDraw={o:pts.slice(), a:startLat, b:startLng};
+    window._routeNeedsUpgrade=false;
   });
 }
 // The road-geometry request dies whenever iOS suspends the app mid-flight. On
