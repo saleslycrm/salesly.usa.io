@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA91 v91</title>
+<title>Salesly VDA92 v92</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -2555,23 +2555,32 @@ function rgeoPut(sig, geo){
    Always resolves to [[lat,lng],…] or null. Never throws. */
 function fetchRoadGeometry(wpLatLng){
   const toLngLat=c=>[c[1],c[0]];
-  function viaORS(){
+  var lastErr="";
+  function orsCall(body){
     if(!ORS_KEY) return Promise.reject("no-key");
     return fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
       method:"POST",
       headers:{"Authorization":ORS_KEY,"Content-Type":"application/json"},
-      body:JSON.stringify({
-        coordinates: wpLatLng.map(toLngLat),
-        radiuses: wpLatLng.map(function(){ return -1; }),   // -1 = snap to nearest road, no cap
-        continue_straight: false
-      })
-    }).then(function(r){ return r.ok ? r.json() : Promise.reject("ORS "+r.status); })
+      body:JSON.stringify(body)
+    }).then(function(r){ if(!r.ok){ lastErr="ORS "+r.status; return Promise.reject(lastErr); } return r.json(); })
       .then(function(geo){
         var f = geo && geo.features && geo.features[0];
         var line = f && f.geometry && f.geometry.coordinates;
-        if(!line || line.length<2) return Promise.reject("ORS empty");
+        if(!line || line.length<2){ lastErr="ORS empty"; return Promise.reject(lastErr); }
         return line.map(function(c){ return [c[1],c[0]]; });
       });
+  }
+  // TIER 1 — the plain request. This is the exact payload that has always
+  // worked; nothing optional is sent, so there is nothing for the API to
+  // reject. Extra parameters go in the fallback below, never here.
+  function viaORSPlain(){ return orsCall({ coordinates: wpLatLng.map(toLngLat) }); }
+  // TIER 2 — retry with unlimited snap radius, which rescues routes where a
+  // stop's geocode landed too far from any road for the default search.
+  function viaORSSnap(){
+    return orsCall({
+      coordinates: wpLatLng.map(toLngLat),
+      radiuses: wpLatLng.map(function(){ return -1; })
+    });
   }
   function osrmPath(list){
     return list.map(function(c){ return c[1]+","+c[0]; }).join(";");
@@ -2611,18 +2620,27 @@ function fetchRoadGeometry(wpLatLng){
       return out.length>=2 ? out : Promise.reject("legs empty");
     });
   }
-  return viaORS()
+  return viaORSPlain()
+    .catch(function(){ return viaORSSnap(); })
     .catch(function(){ return viaOSRM(wpLatLng); })
     .catch(function(){ return viaLegs(); })
     .catch(function(){
       // One retry pass — transient failures are common right after iOS wakes
       // the app (radio not ready yet).
       return new Promise(function(res){ setTimeout(res, 1500); })
-        .then(function(){ return viaORS(); })
+        .then(function(){ return viaORSPlain(); })
         .catch(function(){ return viaOSRM(wpLatLng); })
         .catch(function(){ return null; });
     })
-    .catch(function(){ return null; });
+    .catch(function(){ return null; })
+    .then(function(geo){
+      if(!geo && typeof toast==="function"){
+        // Say WHY the line is straight instead of failing silently — otherwise
+        // a key/quota problem is indistinguishable from a bug.
+        try{ toast("Straight lines — routing unavailable"+(lastErr?" ("+lastErr+")":"")); }catch(e){}
+      }
+      return geo;
+    });
 }
 function drawRouteOverlay(ordered, startLat, startLng, opts){
   if(!mapObj) return;
