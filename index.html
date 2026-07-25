@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA96 v96</title>
+<title>Salesly VDA98 v98</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -795,9 +795,15 @@ function stateFromZip(zip){
 const GS_CFG_KEY="ildental_sb";
 let SB_URL="", SB_KEY="";
 // OpenRouteService key — powers the road-following route line. Unchanged.
-let ORS_KEY="";   // no longer used — routing is Valhalla only, no API key required
+/* ══════════════════════════════════════════════════════════════════════════
+   PASTE YOUR GEOAPIFY API KEY BETWEEN THE QUOTES ON THE NEXT LINE.
+   Get one free (no credit card) at geoapify.com → MyProjects → API Keys.
+   ══════════════════════════════════════════════════════════════════════════ */
+let GEOAPIFY_KEY = "a41e459f0554424fb9a54301378d5dae";
+/* ══════════════════════════════════════════════════════════════════════════ */
+let ORS_KEY="";   // no longer used — routing is Geoapify only
 let GC_KEY="";                 // optional Geocodio API key — rooftop-accurate reverse geocoding for pin drops
-try{const c=JSON.parse(localStorage.getItem(GS_CFG_KEY)||"{}");SB_URL=c.url||"";SB_KEY=c.token||"";if(c.orsKey)ORS_KEY=c.orsKey;if(c.gcKey)GC_KEY=c.gcKey;}catch(e){}
+try{const c=JSON.parse(localStorage.getItem(GS_CFG_KEY)||"{}");SB_URL=c.url||"";SB_KEY=c.token||"";if(c.orsKey)ORS_KEY=c.orsKey;if(c.gcKey)GC_KEY=c.gcKey;if(c.geoKey)GEOAPIFY_KEY=c.geoKey;}catch(e){}
 
 let sb=null, cloudOn=false, pulling=false, pushing=false;
 let lastSyncAt=0, lastSyncErr="", lastRawRows=0, lastSyncJSON="";
@@ -2083,7 +2089,7 @@ function buildMap(){
      Below: keep a handle on the layer, notice failures, and re-request the
      tiles when the app is brought back or the connection returns. */
   tileLayerObj = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    maxZoom:19, attribution:'© OpenStreetMap',
+    maxZoom:19, attribution:'© OpenStreetMap · routing by <a href="https://www.geoapify.com/" target="_blank" rel="noopener">Geoapify</a>',
     crossOrigin:true,
     keepBuffer:4          // hold a wider ring of tiles so small pans don't re-fetch
   });
@@ -2529,37 +2535,63 @@ function rgeoPut(sig, geo){
         pair degrades to a straight line for THAT hop only, not the whole route.
    Always resolves to [[lat,lng],…] or null. Never throws. */
 /* ---- Road geometry: ONE routing engine, one code path ----
-   FOSSGIS-hosted Valhalla. No API key, CORS-enabled, community-funded, and
-   backed by the full planet OSM graph. Deliberately the ONLY engine: a chain of
-   fallbacks made behaviour non-deterministic and hid failures behind whichever
-   tier happened to answer. One engine means one thing to check when something
-   goes wrong, and the toast below names the exact error.
+   Geoapify Routing API. Requires a free API key (no credit card). Deliberately
+   the ONLY engine: a chain of fallbacks made behaviour non-deterministic and hid
+   failures behind whichever tier happened to answer. One engine means one thing
+   to check, and the toast below names the exact error.
    Resolves to [[lat,lng],…] or null. Never throws. */
 function fetchRoadGeometry(wpLatLng){
   var lastErr="";
   function call(){
-    var req={ locations: wpLatLng.map(function(c){ return {lat:+c[0], lon:+c[1]}; }),
-              costing:"auto", directions_options:{units:"miles"} };
-    return fetch("https://valhalla1.openstreetmap.de/route?json="+encodeURIComponent(JSON.stringify(req)))
-      .then(function(r){ if(!r.ok){ lastErr="Valhalla "+r.status; return Promise.reject(lastErr); } return r.json(); })
+    if(!GEOAPIFY_KEY){
+      lastErr="no API key";
+      return Promise.reject(lastErr);
+    }
+    // Geoapify wants waypoints as "lat,lon|lat,lon|…"
+    var wp = wpLatLng.map(function(c){ return (+c[0])+","+(+c[1]); }).join("|");
+    var url = "https://api.geoapify.com/v1/routing"
+            + "?waypoints=" + encodeURIComponent(wp)
+            + "&mode=drive"
+            + "&apiKey=" + encodeURIComponent(GEOAPIFY_KEY);
+    return fetch(url)
+      .then(function(r){ if(!r.ok){ lastErr="Geoapify "+r.status; return Promise.reject(lastErr); } return r.json(); })
       .then(function(j){
-        var legs = j && j.trip && j.trip.legs;
-        if(!legs || !legs.length){ lastErr="Valhalla empty"; return Promise.reject(lastErr); }
+        var f = j && j.features && j.features[0];
+        var g = f && f.geometry;
+        if(!g){ lastErr="Geoapify empty"; return Promise.reject(lastErr); }
         var out=[];
-        legs.forEach(function(leg,i){
-          var pts=decodePolyline(leg.shape,6);
-          if(i>0) pts=pts.slice(1);          // don't duplicate the shared node
-          out=out.concat(pts);
-        });
-        if(out.length<2){ lastErr="Valhalla short"; return Promise.reject(lastErr); }
+        if(g.type==="MultiLineString"){
+          // One LineString per leg — stitch them, dropping the duplicated
+          // node where each leg meets the next.
+          (g.coordinates||[]).forEach(function(seg,i){
+            var pts=seg.map(function(c){ return [c[1],c[0]]; });   // [lon,lat] → [lat,lng]
+            if(i>0) pts=pts.slice(1);
+            out=out.concat(pts);
+          });
+        } else if(g.type==="LineString"){
+          out=(g.coordinates||[]).map(function(c){ return [c[1],c[0]]; });
+        }
+        if(out.length<2){ lastErr="Geoapify short"; return Promise.reject(lastErr); }
         return out;
       });
   }
-  // Single retry for a transient failure (iOS radio not ready after waking).
-  return call()
-    .catch(function(){
-      return new Promise(function(res){ setTimeout(res, 1500); }).then(call);
-    })
+  // Retry policy. A 429 (rate limit) is the expected failure when several reps
+  // plot at the same moment — the free plan allows 5 requests/second across the
+  // whole team. Retrying on a fixed delay would make every phone come back in
+  // lockstep and collide again, so 429s get exponential backoff with RANDOM
+  // jitter: each device waits a different amount and the burst spreads itself
+  // out. Other errors get one quick retry.
+  function attempt(n){
+    return call().catch(function(err){
+      var is429 = String(err).indexOf("429") >= 0;
+      var maxTries = is429 ? 4 : 2;
+      if(n >= maxTries) return Promise.reject(err);
+      // 429: ~0.7s, 1.4s, 2.8s each ±50% jitter. Other errors: flat 1.5s.
+      var wait = is429 ? (700 * Math.pow(2, n-1)) * (0.5 + Math.random()) : 1500;
+      return new Promise(function(res){ setTimeout(res, wait); }).then(function(){ return attempt(n+1); });
+    });
+  }
+  return attempt(1)
     .catch(function(){
       if(typeof toast==="function"){
         try{ toast("Straight lines — routing unavailable"+(lastErr?" ("+lastErr+")":"")); }catch(e){}
