@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA99 v99</title>
+<title>Salesly VDA100 v100</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -917,7 +917,7 @@ function dbToApp(r){
     // the DB trigger that stamps closed_at when the dashboard flips a claimed
     // office to a buying status. appToDb deliberately never sends these.
     claimedBy:r.claimed_by||"", claimedByName:r.claimed_by_name||"",
-    claimedAt:r.claimed_at||"", closedAt:r.closed_at||"", closedStatus:r.closed_status||"",
+    claimedAt:r.claimed_at||"", closedAt:r.closed_at||"", closedStatus:r.closed_status||"", closedVia:r.closed_via||"",
     seed:false
   };
 }
@@ -984,8 +984,8 @@ async function loadViewport(bounds, opts){
     if(rows.length && !("claimed_by" in rows[0])){
       try{
         const {data:cl}=await withTimeout(sb.from("offices")
-          .select("id,claimed_by,claimed_by_name,claimed_at,closed_at,closed_status")
-          .not("claimed_by","is",null).limit(5000), "loading claims", 12000);
+          .select("id,claimed_by,claimed_by_name,claimed_at,closed_at,closed_status,closed_via")
+          .or("claimed_by.not.is.null,closed_at.not.is.null").limit(5000), "loading claims", 12000);
         const byId={}; (cl||[]).forEach(c=>byId[String(c.id)]=c);
         rows.forEach(r=>{ const c=byId[String(r.id)]; if(c) Object.assign(r,c); });
       }catch(e){ /* claims show on the next pull */ }
@@ -1131,7 +1131,8 @@ function cloudSubscribe(){
         try{
           const prev=store.offices[id];
           if(payload.eventType!=="DELETE" && r.closed_at && !(prev&&prev.closedAt) &&
-             sbUser && String(r.claimed_by||"")===String(sbUser.id)){
+             ((sbUser && String(r.claimed_by||"")===String(sbUser.id)) ||
+              (r.claimed_by_name && typeof repMatch==="function" && repMatch(r.claimed_by_name, meName())))){
             toast("⭐ Closed sale: "+(r.name||"your account")+"!");
           }
         }catch(e){}
@@ -1139,7 +1140,7 @@ function cloudSubscribe(){
           // …but claim/close fields are server-owned, so always take those.
           const loc=store.offices[id];
           if(loc && payload.eventType!=="DELETE"){ const n=dbToApp(r);
-            ["claimedBy","claimedByName","claimedAt","closedAt","closedStatus"].forEach(k=>loc[k]=n[k]);
+            ["claimedBy","claimedByName","claimedAt","closedAt","closedStatus","closedVia"].forEach(k=>loc[k]=n[k]);
             try{ rebuild(); renderActive(); }catch(e){} }
           return;
         }
@@ -1627,7 +1628,12 @@ function lastColor(o){ if(!o.visits)return ""; for(const v of o.visits){ if(v.co
 const GOLD="#d4a017";
 function isClosed(o){ return !!(o&&o.closedAt); }
 function isClaimed(o){ return !!(o&&o.claimedBy); }
-function claimedByMe(o){ return !!(o&&o.claimedBy&&sbUser&&String(o.claimedBy)===String(sbUser.id)); }
+function claimedByMe(o){
+  if(!o) return false;
+  if(o.claimedBy&&sbUser&&String(o.claimedBy)===String(sbUser.id)) return true;
+  // auto-credited from a visit whose rep isn't linked to a login: match by name
+  return !!(o.closedVia==='visit'&&o.claimedByName&&typeof repMatch==='function'&&repMatch(o.claimedByName,meName()));
+}
 function isBuyingStatus(o){ const s=effStatus(o); return s==="active"||s==="new"||s==="winback"; }
 // Heat = last visit color, except a closed sale outranks everything.
 function heatOf(o){ return isClosed(o)?"closed":lastColor(o); }
@@ -1636,7 +1642,7 @@ function claimBlockHTML(o, compact){
   const who=esc(o.claimedByName||"a rep");
   if(isClosed(o)){
     return `<div class="claimbox closed"><span class="cb-star">★</span><div class="cb-txt"><b>Closed sale</b> — ${who}
-      <span class="cb-sub">Claimed ${d(o.claimedAt)} · closed ${d(o.closedAt)}${o.closedStatus?` (${esc(o.closedStatus)})`:''}</span></div>
+      <span class="cb-sub">${o.closedVia==='visit'?'Visited':'Claimed'} ${d(o.claimedAt)} · closed ${d(o.closedAt)}${o.closedStatus?` (${esc(o.closedStatus)})`:''}</span></div>
       ${(!compact&&isAdmin())?`<button type="button" class="cb-btn ghost" data-release="${o.id}">Clear</button>`:''}</div>`;
   }
   if(isClaimed(o)){
@@ -1651,7 +1657,7 @@ function claimBlockHTML(o, compact){
 function applyClaim(id, row){
   const loc=store.offices[id]; if(!loc) return;
   loc.claimedBy=row.claimed_by||""; loc.claimedByName=row.claimed_by_name||"";
-  loc.claimedAt=row.claimed_at||""; loc.closedAt=row.closed_at||""; loc.closedStatus=row.closed_status||"";
+  loc.claimedAt=row.claimed_at||""; loc.closedAt=row.closed_at||""; loc.closedStatus=row.closed_status||""; loc.closedVia=row.closed_via||"";
   try{localStorage.setItem(SK,JSON.stringify(store));}catch(e){}
 }
 async function claimOffice(id){
