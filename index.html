@@ -311,6 +311,23 @@ body.cal-view .fab{display:none;}
 .heat b{font-family:var(--mono);font-size:13px;font-weight:700;}
 .heat.on{background:var(--teal-deep);border-color:var(--teal-deep);}
 .heat.on b{color:#fff;}
+.heatset{flex-wrap:wrap;}
+.heat .hd-star{color:#d4a017;font-size:15px;line-height:11px;width:13px;text-align:center;flex:0 0 auto;text-shadow:0 0 1px rgba(0,0,0,.25);}
+.heat.on .hd-star{color:#ffd54a;}
+/* claimed / closed */
+.claimbox{display:flex;align-items:center;gap:10px;margin:10px 2px 4px;padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.3;}
+.claimbox.closed{background:linear-gradient(135deg,#fff7d6,#ffe9a3);border:1px solid #e8c552;color:#5a4300;}
+.claimbox.claimed{background:#fffaf0;border:1px dashed #d4a017;color:#5a4a1a;}
+.claimbox .cb-star{font-size:22px;color:#d4a017;line-height:1;flex:0 0 auto;text-shadow:0 1px 0 #fff;}
+.claimbox .cb-txt{flex:1;min-width:0;}
+.claimbox .cb-sub{display:block;font-size:11.5px;opacity:.8;margin-top:2px;}
+.cb-btn{font-family:inherit;font-size:12px;font-weight:600;padding:6px 10px;border-radius:8px;border:1px solid #d9c79a;background:#fff;color:#5a4a1a;cursor:pointer;flex:0 0 auto;}
+.cb-claim{font-family:inherit;display:flex;align-items:center;justify-content:center;gap:7px;width:100%;margin:10px 0 4px;padding:10px 12px;border-radius:12px;border:1.5px dashed #d4a017;background:#fffdf5;color:#7a5c00;font-size:13.5px;font-weight:700;cursor:pointer;}
+.cb-claim span{font-size:17px;color:#d4a017;line-height:1;}
+.pill.closedpill{background:#fff1bf;color:#7a5c00;border:1px solid #e8c552;font-weight:700;}
+.pill.claimpill{background:#fffaf0;color:#7a5c00;border:1px dashed #d4a017;}
+.pin-closed{width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:24px;line-height:1;color:#d4a017;
+  text-shadow:-1.5px 0 #fff,1.5px 0 #fff,0 -1.5px #fff,0 1.5px #fff,0 2px 4px rgba(0,0,0,.35);}
 .morebtn{font-family:inherit;display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;padding:8px 12px;border-radius:999px;background:var(--surface);border:1px solid var(--line-strong);color:var(--ink-faint);cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent;}
 .morebtn .cv{font-size:9px;opacity:.6;transition:transform .15s;}
 .morebtn.open .cv{transform:rotate(180deg);}
@@ -542,6 +559,7 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
       <button class="heat" data-gh="green" aria-label="Good"><span class="hd" style="background:var(--green)"></span><b id="hc_green">0</b></button>
       <button class="heat" data-gh="yellow" aria-label="Okay"><span class="hd" style="background:#bf9b16"></span><b id="hc_yellow">0</b></button>
       <button class="heat" data-gh="red" aria-label="Poor"><span class="hd" style="background:var(--danger)"></span><b id="hc_red">0</b></button>
+      <button class="heat" data-gh="closed" aria-label="Closed"><span class="hd-star">★</span><b id="hc_closed">0</b></button>
     </div>
   </div>
   <div class="exppanel" id="exp_lab" style="display:none;">
@@ -895,6 +913,11 @@ function dbToApp(r){
     totalSales:r.total_sales==null?0:+r.total_sales,
     status:r.status||"",                        // lifecycle: Active/New/Winback/Falloff/Inactive
     status_changed_at:r.status_changed_at||"",  // stamped by DB only on real transitions
+    // Claim → Closed sale. Written ONLY by the claim_office/release_office RPCs and
+    // the DB trigger that stamps closed_at when the dashboard flips a claimed
+    // office to a buying status. appToDb deliberately never sends these.
+    claimedBy:r.claimed_by||"", claimedByName:r.claimed_by_name||"",
+    claimedAt:r.claimed_at||"", closedAt:r.closed_at||"", closedStatus:r.closed_status||"",
     seed:false
   };
 }
@@ -917,6 +940,8 @@ function appToDb(o){
     // tier is deliberately NOT written here. Tier is owned by the dashboard's
     // daily invoice upsert (S = invoiced customer). A rep editing an office in
     // the field must never silently demote a customer back to a prospect.
+    // claimed_* / closed_* are likewise NOT written here — they change only via the
+    // claim_office / release_office RPCs (a DB trigger rejects any other write).
   };
 }
 
@@ -953,6 +978,17 @@ async function loadViewport(bounds, opts){
       // the offices table directly instead: every S-tier customer (always shown,
       // paged past the 1000-row cap) plus A/B prospects inside the box.
       rows = await loadOfficesDirect(sw, ne);
+    }
+    // If get_offices_in_viewport lists columns by hand it won't carry the claim
+    // fields yet. Claimed offices are a small set, so fetch them separately.
+    if(rows.length && !("claimed_by" in rows[0])){
+      try{
+        const {data:cl}=await withTimeout(sb.from("offices")
+          .select("id,claimed_by,claimed_by_name,claimed_at,closed_at,closed_status")
+          .not("claimed_by","is",null).limit(5000), "loading claims", 12000);
+        const byId={}; (cl||[]).forEach(c=>byId[String(c.id)]=c);
+        rows.forEach(r=>{ const c=byId[String(r.id)]; if(c) Object.assign(r,c); });
+      }catch(e){ /* claims show on the next pull */ }
     }
     _lastBox=key;
     lastRawRows=rows.length;
@@ -1091,7 +1127,22 @@ function cloudSubscribe(){
       .on("postgres_changes",{event:"*",schema:"public",table:"offices"},payload=>{
         const r=payload.new||payload.old; if(!r||!r.id) return;
         const id=String(r.id);
-        if(DIRTY.has(id)) return;                   // our own unpushed edit wins
+        // ⭐ A claim of mine just turned into a closed sale — celebrate it.
+        try{
+          const prev=store.offices[id];
+          if(payload.eventType!=="DELETE" && r.closed_at && !(prev&&prev.closedAt) &&
+             sbUser && String(r.claimed_by||"")===String(sbUser.id)){
+            toast("⭐ Closed sale: "+(r.name||"your account")+"!");
+          }
+        }catch(e){}
+        if(DIRTY.has(id)){                          // our own unpushed edit wins…
+          // …but claim/close fields are server-owned, so always take those.
+          const loc=store.offices[id];
+          if(loc && payload.eventType!=="DELETE"){ const n=dbToApp(r);
+            ["claimedBy","claimedByName","claimedAt","closedAt","closedStatus"].forEach(k=>loc[k]=n[k]);
+            try{ rebuild(); renderActive(); }catch(e){} }
+          return;
+        }
         if(payload.eventType==="DELETE"){ delete store.offices[id]; }
         else if(store.offices[id]){ store.offices[id]=dbToApp(r); }  // update what's loaded
         // S-tier (invoiced customers) is ALWAYS shown regardless of viewport, so a
@@ -1505,8 +1556,8 @@ function fmtDate(s){ // YYYY-MM-DD -> "Jun 4, 2026"
 function daysAgo(s){const d=normDate(s);if(!d)return Infinity;const p=d.split("-");const dt=new Date(+p[0],+p[1]-1,+p[2]);return Math.floor((Date.now()-dt.getTime())/86400000);}
 function lastVisit(o){return (o.visits&&o.visits.length)?o.visits[0].date:"";}
 // --- visit objects: {date:"YYYY-MM-DD", color:"green|yellow|red"|"", note:""} ---
-const VCOLORS={green:"#2f7d3f",yellow:"#bf9b16",red:"#b3402f"};
-const VLABEL={green:"Good",yellow:"Okay",red:"Poor"};
+const VCOLORS={green:"#2f7d3f",yellow:"#bf9b16",red:"#b3402f",closed:"#d4a017"};
+const VLABEL={green:"Good",yellow:"Okay",red:"Poor",closed:"Closed"};
 function parseVisits(v){
   let arr=[];
   if(v==null) arr=[];
@@ -1569,6 +1620,62 @@ function statusRecentlyChanged(o, days){
   return (Date.now()-t) <= (days||7)*86400000;
 }
 function lastColor(o){ if(!o.visits)return ""; for(const v of o.visits){ if(v.color)return v.color; } return ""; }
+/* ---------- claimed accounts → closed sales ⭐ ----------
+   A rep claims a prospect ("Mark as my account"). When the dashboard's invoice
+   push later flips it to a buying status (Active / New / Winback), a DB trigger
+   stamps closed_at and it becomes the 4th heat status: ⭐ Closed. */
+const GOLD="#d4a017";
+function isClosed(o){ return !!(o&&o.closedAt); }
+function isClaimed(o){ return !!(o&&o.claimedBy); }
+function claimedByMe(o){ return !!(o&&o.claimedBy&&sbUser&&String(o.claimedBy)===String(sbUser.id)); }
+function isBuyingStatus(o){ const s=effStatus(o); return s==="active"||s==="new"||s==="winback"; }
+// Heat = last visit color, except a closed sale outranks everything.
+function heatOf(o){ return isClosed(o)?"closed":lastColor(o); }
+function claimBlockHTML(o, compact){
+  const d=x=>x?fmtDate(String(x).slice(0,10)):"";
+  const who=esc(o.claimedByName||"a rep");
+  if(isClosed(o)){
+    return `<div class="claimbox closed"><span class="cb-star">★</span><div class="cb-txt"><b>Closed sale</b> — ${who}
+      <span class="cb-sub">Claimed ${d(o.claimedAt)} · closed ${d(o.closedAt)}${o.closedStatus?` (${esc(o.closedStatus)})`:''}</span></div>
+      ${(!compact&&isAdmin())?`<button type="button" class="cb-btn ghost" data-release="${o.id}">Clear</button>`:''}</div>`;
+  }
+  if(isClaimed(o)){
+    const mine=claimedByMe(o);
+    return `<div class="claimbox claimed"><span class="cb-star hollow">☆</span><div class="cb-txt"><b>${mine?'Your account':'Claimed by '+who}</b>
+      <span class="cb-sub">Since ${d(o.claimedAt)} · closes automatically on first order</span></div>
+      ${(!compact&&(mine||isAdmin()))?`<button type="button" class="cb-btn ghost" data-release="${o.id}">Release</button>`:''}</div>`;
+  }
+  if(isBuyingStatus(o)) return "";            // already a customer — nothing to claim
+  return `<button type="button" class="cb-claim" data-claim="${o.id}"><span>☆</span> Mark as my account</button>`;
+}
+function applyClaim(id, row){
+  const loc=store.offices[id]; if(!loc) return;
+  loc.claimedBy=row.claimed_by||""; loc.claimedByName=row.claimed_by_name||"";
+  loc.claimedAt=row.claimed_at||""; loc.closedAt=row.closed_at||""; loc.closedStatus=row.closed_status||"";
+  try{localStorage.setItem(SK,JSON.stringify(store));}catch(e){}
+}
+async function claimOffice(id){
+  if(!cloudOn||!sb||!sbUser){ toast("Sign in and connect to claim accounts"); return; }
+  try{
+    const {data,error}=await withTimeout(sb.rpc("claim_office",{p_office_id:String(id),p_rep_name:meName()||null}),"claiming",12000);
+    if(error) throw error;
+    applyClaim(id, data||{});
+    rebuild(); renderActive(); openDetail(id);
+    toast("☆ Marked as your account — it closes when their first order comes through");
+  }catch(e){ toast("⚠️ "+((e&&e.message)||"Couldn't claim")); }
+}
+async function releaseOffice(id){
+  const o=officeById(id); if(!o) return;
+  if(!cloudOn||!sb||!sbUser){ toast("Sign in and connect first"); return; }
+  if(!confirm(isClosed(o)?"Clear this closed sale? (admin)":"Release this account so someone else can claim it?")) return;
+  try{
+    const {data,error}=await withTimeout(sb.rpc("release_office",{p_office_id:String(id)}),"releasing",12000);
+    if(error) throw error;
+    applyClaim(id, data||{});
+    rebuild(); renderActive(); openDetail(id);
+    toast("Released");
+  }catch(e){ toast("⚠️ "+((e&&e.message)||"Couldn't release")); }
+}
 // Auto-visit on edit: when a rep changes anything about an office, treat that as
 // a visit TODAY so they don't have to remember the "Log visit" button. We only
 // add one if today isn't already logged (so repeated edits in a day don't pile
@@ -1588,6 +1695,7 @@ function toast(msg,undo){const t=document.getElementById('toast');t.innerHTML=es
 
 /* ---------- filtering ---------- */
 function isMine(o){
+  if(claimedByMe(o)) return true;
   const me=meName(); if(!me)return false;
   if((o.addedBy||"").toLowerCase()===me.toLowerCase())return true;
   return !!(o.visits&&o.visits.some(v=>repMatch(v.rep,me)));
@@ -1600,7 +1708,7 @@ function groupsPass(o){
   if(state.gVisit==="mine"&&!isMine(o))return false;
   if(state.gStatus==="active"&&o.active===false)return false;
   if(state.gStatus==="inactive"&&o.active!==false)return false;
-  if(state.gHeat&&state.gHeat.length){ if(state.gHeat.indexOf(lastColor(o))<0)return false; }
+  if(state.gHeat&&state.gHeat.length){ if(state.gHeat.indexOf(heatOf(o))<0)return false; }
   if(state.gLab&&state.gLab.length){
     if(!labDialPass(o))return false;   // state first — Lab filters never widen to the whole book
     // Same source of truth as the pin colors: per-doctor 📊 LAB note lines,
@@ -1766,10 +1874,10 @@ function renderInner(){
     const savedHeat=state.gHeat; state.gHeat=[];        // ignore heat so the dials show what heat WOULD narrow
     const ok=matchFilter(o); state.gHeat=savedHeat; return ok;
   });
-  const hc={green:0,yellow:0,red:0};
-  heatBase.forEach(o=>{ const c=lastColor(o); if(c in hc) hc[c]++; });
+  const hc={green:0,yellow:0,red:0,closed:0};
+  heatBase.forEach(o=>{ const c=heatOf(o); if(c in hc) hc[c]++; });
   const setHc=(id,n)=>{ const el=document.getElementById(id); if(el) el.textContent=n.toLocaleString(); };
-  setHc('hc_green',hc.green); setHc('hc_yellow',hc.yellow); setHc('hc_red',hc.red);
+  setHc('hc_green',hc.green); setHc('hc_yellow',hc.yellow); setHc('hc_red',hc.red); setHc('hc_closed',hc.closed);
 
   // Lab-status dials: fixed state totals (see labDialPass). Deliberately NOT
   // scoped to the current filters — selecting a rep in More, a visited chip, or
@@ -1938,7 +2046,7 @@ function renderInner(){
           <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
         </div>
         <div class="onm"><div class="otitle">${esc(o.name)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
-        ${labChipCompact(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
+        ${isClosed(o)?'<span class="pill closedpill">★ Closed</span>':(isClaimed(o)?`<span class="pill claimpill">☆ ${claimedByMe(o)?'Mine':esc((o.claimedByName||'').split(' ')[0]||'Claimed')}</span>`:'')}${labChipCompact(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
         ${stripLab(o.notes)?'<span class="dot note"></span>':''}
       </button>`;
     };
@@ -1981,7 +2089,7 @@ function pinStyle(o){
     bgCss=`background:${bg}`;
   }
   const ring = statusRecentlyChanged(o,7) ? ';box-shadow:0 0 0 2px #f59e0b,0 0 0 3px #fff' : '';
-  return `style="${bgCss};border-color:#fff${ring}"`;
+  return `style="${bgCss};border-color:${isClaimed(o)?GOLD:'#fff'}${ring}"`;
 }
 function haversine(lat1,lng1,lat2,lng2){
   const R=3958.8, toRad=x=>x*Math.PI/180;
@@ -2088,8 +2196,19 @@ function buildMap(){
 
      Below: keep a handle on the layer, notice failures, and re-request the
      tiles when the app is brought back or the connection returns. */
-  tileLayerObj = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    maxZoom:19, attribution:'© OpenStreetMap · routing by <a href="https://www.geoapify.com/" target="_blank" rel="noopener">Geoapify</a>',
+  // Map tiles come from Geoapify (same key as routing). OpenStreetMap's own
+  // volunteer tile servers block apps like this under their usage policy — that's
+  // the yellow/black "Access blocked" tiles. OSM is only a last-resort fallback
+  // if no Geoapify key is set.
+  const _retina = (window.devicePixelRatio||1) > 1 ? '@2x' : '';
+  const _tileUrl = GEOAPIFY_KEY
+    ? 'https://maps.geoapify.com/v1/tile/osm-carto/{z}/{x}/{y}'+_retina+'.png?apiKey='+encodeURIComponent(GEOAPIFY_KEY)
+    : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  tileLayerObj = L.tileLayer(_tileUrl,{
+    maxZoom:19,
+    attribution: GEOAPIFY_KEY
+      ? 'Powered by <a href="https://www.geoapify.com/" target="_blank" rel="noopener">Geoapify</a> · © <a href="https://openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
+      : '© OpenStreetMap',
     crossOrigin:true,
     keepBuffer:4          // hold a wider ring of tiles so small pans don't re-fetch
   });
@@ -2313,6 +2432,7 @@ function popupHTML(o){
     <a class="popup-ad" href="${mapAppleLink(o)}" target="_blank" rel="noopener" style="text-decoration:none;display:block;">${esc(o.addr)}, ${esc(o.city)}</a>
     ${dist}
     ${effStatus(o)?`<div style="margin:2px 0 4px;">${labChip(o)}</div>`:''}
+    ${claimBlockHTML(o,true)}
     ${scOn?`<span class="popup-sc">${esc(o.scanner)}</span>`:''}
     ${noteBlock}
     <textarea class="popup-quick" id="pq_${o.id}" placeholder="Add a quick note…"></textarea>
@@ -2327,7 +2447,9 @@ function popupHTML(o){
     </div>`;
 }
 function makeMarker(o){
-  const icon=L.divIcon({className:'',html:`<div class="pin ${pinClass(o)}" ${pinStyle(o)}></div>`,iconSize:[16,16],iconAnchor:[8,16],popupAnchor:[0,-15]});
+  const icon=isClosed(o)
+    ? L.divIcon({className:'',html:`<div class="pin-closed" title="Closed sale">★</div>`,iconSize:[24,24],iconAnchor:[12,14],popupAnchor:[0,-12]})
+    : L.divIcon({className:'',html:`<div class="pin ${pinClass(o)}" ${pinStyle(o)}></div>`,iconSize:[16,16],iconAnchor:[8,16],popupAnchor:[0,-15]});
   const m=L.marker([o.lat,o.lng],{icon});
   // Render the popup from the CURRENT office (by id) at open time, not the snapshot
   // captured here — otherwise edits made after the marker was built (e.g. ticking an
@@ -2714,6 +2836,8 @@ function wirePopup(e){
   if(view) view.onclick = function(){ openDetail(view.getAttribute('data-pop-view')); };
   if(edit) edit.onclick = function(){ openForm(edit.getAttribute('data-pop-edit')); };
   if(note) note.onclick = function(){ quickNote(note.getAttribute('data-pop-note')); };
+  const clm = el.querySelector('[data-claim]');
+  if(clm) clm.onclick = function(){ const id=clm.getAttribute('data-claim'); try{mapObj.closePopup();}catch(e){} claimOffice(id); };
   const kit = el.querySelector('[data-pop-kit]');
   const wel = el.querySelector('[data-pop-welcome]');
   if(kit) kit.onchange = function(){ setOnboarding(kit.getAttribute('data-pop-kit'),'starterKit',kit.checked); };
@@ -3250,6 +3374,7 @@ function openDetail(id){
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg> Apple Maps</a>
     </div>
     ${effStatus(o)?`<div style="margin:10px 2px 2px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;">${labChip(o)}<span style="font-size:11px;color:#5c7370;flex:1 1 100%;">Lab pipeline status — per doctor, updated by the daily import</span></div>`:''}
+    ${claimBlockHTML(o,false)}
     <div class="dgrid">
       <div class="dcard full"><div class="dl">Address</div><a class="dv" href="${mapAppleLink(o)}" target="_blank" rel="noopener">${esc(o.addr)}, ${esc(o.city)}, IL ${esc(o.zip)}</a></div>
       <div class="dcard"><div class="dl">Phone</div>${o.phone?`<a class="dv" href="tel:${esc(o.phone)}">${esc(o.phone)}</a>`:'<div class="dv" style="color:var(--ink-faint)">—</div>'}</div>
@@ -3261,7 +3386,7 @@ function openDetail(id){
       <div class="dcard"><div class="dl">Visit Day / Time</div><div class="dv">${esc(o.visitDay)||'—'}</div></div>
       <div class="dcard"><div class="dl">Last Visited</div><div class="dv" style="${lastVisit(o)?'color:var(--teal)':''}">${lastVisit(o)?esc(fmtDate(lastVisit(o))):'—'}</div></div>
       <div class="dcard"><div class="dl">Total Visits</div><div class="dv">${(o.visits&&o.visits.length)||0}</div></div>
-      <div class="dcard"><div class="dl">Latest Status</div><div class="dv">${lastColor(o)?`<span class="vdot" style="background:${VCOLORS[lastColor(o)]}"></span>${VLABEL[lastColor(o)]}`:'<span style="color:var(--ink-faint)">—</span>'}</div></div>
+      <div class="dcard"><div class="dl">Latest Status</div><div class="dv">${isClosed(o)?`<span style="color:${GOLD};font-size:15px;">★</span> Closed`:(lastColor(o)?`<span class="vdot" style="background:${VCOLORS[lastColor(o)]}"></span>${VLABEL[lastColor(o)]}`:'<span style="color:var(--ink-faint)">—</span>')}</div></div>
       <div class="dcard"><div class="dl">Added By</div><div class="dv">${o.addedBy?esc(o.addedBy):'<span style="color:var(--ink-faint)">—</span>'}</div></div>
       <div class="dcard"><div class="dl">Active</div><div class="dv" style="color:${inactive?'var(--danger)':'var(--green)'}">${inactive?'Inactive':'Active'}</div></div>
     </div>
@@ -3540,7 +3665,7 @@ function buildCSV(onlyVisited){
   const head=["Practice Name","Address","City","State","ZIP","Latitude","Longitude","County","Phone","Email","Scanner","Current Lab","Doctors","Office Hours","Visit Day/Time","Visited","Active","Added By","Last Visited","Latest Status","Logged By (latest)","Visit Count","All Visit Dates","Notes","Lab Status"];
   const q=v=>{v=(v==null?"":String(v));return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
   const lines=[head.join(",")];
-  rows.forEach(o=>lines.push([o.name,o.addr,o.city,"IL",o.zip,o.lat,o.lng,o.county||"",o.phone,o.email,o.scanner,o.lab||"",o.drs,o.hours,o.visitDay,isVisited(o)?"Yes":"No",o.active===false?"Inactive":"Active",o.addedBy||"",lastVisit(o)?fmtDate(lastVisit(o)):"",lastColor(o)?VLABEL[lastColor(o)]:"",(o.visits&&o.visits.length&&o.visits[0].rep)?o.visits[0].rep:"",(o.visits&&o.visits.length)||0,(o.visits&&o.visits.length)?o.visits.map(v=>fmtDate(v.date)+(v.color?" ("+VLABEL[v.color]+")":"")+(v.rep?" "+v.rep:"")).join(" | "):"",stripLab(o.notes),LAB_LABEL[labStatus(o)]||""].map(q).join(",")));
+  rows.forEach(o=>lines.push([o.name,o.addr,o.city,"IL",o.zip,o.lat,o.lng,o.county||"",o.phone,o.email,o.scanner,o.lab||"",o.drs,o.hours,o.visitDay,isVisited(o)?"Yes":"No",o.active===false?"Inactive":"Active",o.addedBy||"",lastVisit(o)?fmtDate(lastVisit(o)):"",heatOf(o)?VLABEL[heatOf(o)]:"",(o.visits&&o.visits.length&&o.visits[0].rep)?o.visits[0].rep:"",(o.visits&&o.visits.length)||0,(o.visits&&o.visits.length)?o.visits.map(v=>fmtDate(v.date)+(v.color?" ("+VLABEL[v.color]+")":"")+(v.rep?" "+v.rep:"")).join(" | "):"",stripLab(o.notes),LAB_LABEL[labStatus(o)]||""].map(q).join(",")));
   return {csv:lines.join("\r\n"),count:rows.length};
 }
 function downloadCSV(onlyVisited){
@@ -3993,6 +4118,8 @@ function wire(){
   on('sheetBody','click',e=>{
     const ed=e.target.closest('[data-edit]'); if(ed){openForm(ed.getAttribute('data-edit'));return;}
     const dl=e.target.closest('[data-del]'); if(dl){delOffice(dl.getAttribute('data-del'));return;}
+    const cl=e.target.closest('[data-claim]'); if(cl){claimOffice(cl.getAttribute('data-claim'));return;}
+    const rl=e.target.closest('[data-release]'); if(rl){releaseOffice(rl.getAttribute('data-release'));return;}
   });
   on('btnAdd','click',()=>{
     // If we have the rep's GPS location, pre-fill coordinates AND reverse-geocode
