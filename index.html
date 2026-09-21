@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA105 v105</title>
+<title>Salesly VDA106 v106</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -2011,6 +2011,14 @@ function territoryPass(o){
   // comma-separated list all work). Empty when no territory is set OR the text
   // isn't a recognizable state — both fall back to the GPS behavior below.
   if(isAdmin() && allTerrOn()) return true;   // admin opted into the national book
+  // The border cushion applies in EVERY mode, not just the no-territory
+  // fallback below. Chicago sits 20 minutes from Indiana, and a rep standing
+  // near a state line should see what is across the road from them. Without
+  // this, assigning a territory silently removed offices a rep could see
+  // before, which is worse than the problem territory was solving.
+  if(userPos && o.lat && o.lng){
+    if(haversine(userPos.lat,userPos.lng,+o.lat,+o.lng)<=BORDER_MILES) return true;
+  }
   const terr=territoryStates();
   if(terr.length){
     // Territory is authoritative: every rep on the same territory sees the exact
@@ -4364,11 +4372,22 @@ function openWhoAmI(){
     </div>
     ${opts}
     ${(function(){ const h=assignedStates(), t=travelState();
-        if(!t || !h.length || h.indexOf(t)>=0) return '';
-        const nice=t.replace(/\b\w/g,c=>c.toUpperCase());
+        const nice=x=>String(x||'').replace(/\b\w/g,c=>c.toUpperCase());
+        if(!h.length){
+          // No territory assigned: say plainly what is being shown and why.
+          return `<div class="claimbox claimed" style="margin:10px 0 0;"><span class="cb-star hollow">📍</span>
+            <div class="cb-txt"><b>${t?('Showing '+esc(nice(t))+' — based on your location'):'No territory set'}</b>
+            <span class="cb-sub">${t?('No territory is assigned, so Salesly follows wherever you are. Ask an admin to set one if you cover more than '+esc(nice(t))+'.')
+                                    :'No territory assigned and no location yet, so everything is showing.'}</span></div></div>`;
+        }
+        if(!t || h.indexOf(t)>=0){
+          return `<div class="claimbox claimed" style="margin:10px 0 0;"><span class="cb-star hollow">📍</span>
+            <div class="cb-txt"><b>Territory: ${esc(h.map(nice).join(', '))}</b>
+            <span class="cb-sub">Offices in another state appear automatically while you're there, and search always reaches the whole country.</span></div></div>`;
+        }
         return `<div class="claimbox claimed" style="margin:10px 0 0;"><span class="cb-star hollow">📍</span>
-          <div class="cb-txt"><b>Traveling — ${esc(nice)} included</b>
-          <span class="cb-sub">You're outside your assigned territory, so ${esc(nice)} offices are showing too. This clears itself when you head home.</span></div></div>`;
+          <div class="cb-txt"><b>Traveling — ${esc(nice(t))} included</b>
+          <span class="cb-sub">You're outside ${esc(h.map(nice).join(', '))}, so ${esc(nice(t))} offices are showing too. This clears itself when you head home.</span></div></div>`;
       })()}
     ${isAdmin()?`<button class="btn btn-ghost" id="wai_allterr" style="width:100%;margin-top:8px;">${allTerrOn()?'✓ Showing ALL territories':'Show all territories'}</button>
     <button class="btn btn-ghost" id="wai_manage" style="width:100%;margin-top:8px;">Manage reps</button>`:''}`;
