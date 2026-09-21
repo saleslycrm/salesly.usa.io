@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA100 v100</title>
+<title>Salesly VDA104 v104</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -324,6 +324,7 @@ body.cal-view .fab{display:none;}
 .cb-btn{font-family:inherit;font-size:12px;font-weight:600;padding:6px 10px;border-radius:8px;border:1px solid #d9c79a;background:#fff;color:#5a4a1a;cursor:pointer;flex:0 0 auto;}
 .cb-claim{font-family:inherit;display:flex;align-items:center;justify-content:center;gap:7px;width:100%;margin:10px 0 4px;padding:10px 12px;border-radius:12px;border:1.5px dashed #d4a017;background:#fffdf5;color:#7a5c00;font-size:13.5px;font-weight:700;cursor:pointer;}
 .cb-claim span{font-size:17px;color:#d4a017;line-height:1;}
+.terrin{font-family:inherit;font-size:13px;padding:7px 9px;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--ink);}
 .pill.closedpill{background:#fff1bf;color:#7a5c00;border:1px solid #e8c552;font-weight:700;}
 .pill.claimpill{background:#fffaf0;color:#7a5c00;border:1px dashed #d4a017;}
 .pin-closed{width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:24px;line-height:1;color:#d4a017;
@@ -722,6 +723,35 @@ function repMatch(a,b){
   return true;
 }
 function repTerritory(){ return ME?(ME.territory||""):""; }
+/* ---------- rep identity ----------
+   A visit is OWNED by a login id (uid). The name is display only. Old visits
+   have no uid, so we still fall back to name matching — but only when that
+   match is UNAMBIGUOUS. "Dan Ortiz" fuzzy-matches both Dan Ortiz and Daniel
+   Ortiz, so with both on the roster the fuzzy result is discarded rather than
+   credited to the wrong person. */
+function myUid(){ try{ return (typeof sbUser!=="undefined"&&sbUser)?String(sbUser.id):""; }catch(e){ return ""; } }
+function nameKey(n){ return String(n||"").toLowerCase().replace(/[^a-z0-9]/g,""); }
+// Stable key for one visit's author: login id when known, else normalized name.
+function visitRepKey(v){ return v ? (String(v.uid||"").trim() || nameKey(v.rep) || "unknown") : "unknown"; }
+// Does this visit belong to the given rep? rObj is a REPS entry (or ME).
+function visitIsBy(v, rObj){
+  if(!v||!rObj) return false;
+  if(v.uid && rObj.id) return String(v.uid)===String(rObj.id);
+  const vn=nameKey(v.rep); if(!vn) return false;
+  if(vn===nameKey(rObj.name)) return true;                  // exact name
+  if(!repMatch(v.rep, rObj.name)) return false;             // not even a loose match
+  // Loose match: only trust it if NO other rep also loosely matches.
+  try{
+    const others=(REPS||[]).filter(x=>x&&x.id!==rObj.id&&repMatch(v.rep,x.name));
+    if(others.length) return false;                          // ambiguous -> don't guess
+  }catch(e){}
+  return true;
+}
+function visitIsMine(v){
+  const uid=myUid();
+  if(v&&v.uid&&uid) return String(v.uid)===String(uid);
+  return visitIsBy(v, ME||{name:meName()});
+}
 // ---- Territory matching helpers ----
 // The Territory field is free text, so make matching forgiving: full state names
 // and 2-letter abbreviations both work ("Illinois", "IL", "il." all match), extra
@@ -749,6 +779,12 @@ let currentGeoState="";        // full state name detected from GPS, e.g. "Illin
 let _geoStateAt=null;          // {lat,lng} where we last detected, to avoid re-querying
 async function detectGeoState(lat,lng,force){
   if(lat==null||lng==null) return;
+  // Skip entirely when a territory is assigned: territoryPass() ignores the GPS
+  // state in that case, so the lookup is wasted. It also matters at scale —
+  // this hits OpenStreetMap's Nominatim, whose usage policy forbids heavy
+  // automated use, and 20 phones polling it is exactly how an app gets blocked
+  // (the same way the OSM tile servers blocked us).
+  try{ if(territoryStates().length) return; }catch(e){}
   // Skip if we already detected near here (within ~15 miles) unless forced.
   if(!force && _geoStateAt && haversine(lat,lng,_geoStateAt.lat,_geoStateAt.lng)<15 && currentGeoState) return;
   try{
@@ -906,16 +942,19 @@ function dbToApp(r){
     pricelist:r.pricelist||"",
     visits:r.visits||"",                       // parseVisits() unpacks this in rebuild()
     visited:!!(r.visits&&String(r.visits).trim()),
-    active:r.active!==false,
     addedBy:r.added_by||"",
     tier:r.tier||"B",
     lastInvoiceDate:r.last_invoice_date||"",
     totalSales:r.total_sales==null?0:+r.total_sales,
     status:r.status||"",                        // lifecycle: Active/New/Winback/Falloff/Inactive
+    active: (r.deleted_at ? false : (r.active===false?false:true)),
     status_changed_at:r.status_changed_at||"",  // stamped by DB only on real transitions
     // Claim → Closed sale. Written ONLY by the claim_office/release_office RPCs and
     // the DB trigger that stamps closed_at when the dashboard flips a claimed
     // office to a buying status. appToDb deliberately never sends these.
+    // deleted_at is the server-side soft delete (see security hardening SQL).
+    // Treat it exactly like active=false so a deleted office stays hidden.
+    deletedAt:r.deleted_at||"",
     claimedBy:r.claimed_by||"", claimedByName:r.claimed_by_name||"",
     claimedAt:r.claimed_at||"", closedAt:r.closed_at||"", closedStatus:r.closed_status||"", closedVia:r.closed_via||"",
     seed:false
@@ -1056,10 +1095,13 @@ async function cloudPush(silent){
         (cur||[]).forEach(srv=>{
           const loc=store.offices[srv.id]; if(!loc) return;
           // visits: union by date; a date present on both keeps the local entry.
+          // Key on date + AUTHOR, so two reps visiting the same office on the
+          // same day both survive. Keying on date alone silently dropped one.
           const seen={}, out=[];
           const add=e=>{ e=String(e||"").trim(); if(!e) return;
-            const d=e.split("~")[0]; if(d && !seen[d]){ seen[d]=1; out.push(e); } };
-          parseVisits(loc.visits).forEach(v=>add([v.date,v.color||"",v.note||"",v.rep||""].join("~")));
+            const pv=parseVisits(e)[0]; if(!pv) return;
+            const k=pv.date+"|"+visitRepKey(pv); if(!seen[k]){ seen[k]=1; out.push(e); } };
+          parseVisits(loc.visits).forEach(v=>add(visitsToString([v])));
           String(srv.visits||"").split("|").forEach(add);
           out.sort((a,b)=>String(b).localeCompare(String(a)));   // newest first
           loc.visits=parseVisits(out.join(" | "));
@@ -1076,10 +1118,51 @@ async function cloudPush(silent){
       console.warn("visit merge skipped:", mergeErr && mergeErr.message);
     }
 
-    const rows=ids.map(id=>store.offices[id]).filter(Boolean).map(appToDb);
-    if(rows.length){
-      const {error}=await withTimeout(sb.from("offices").upsert(rows,{onConflict:"id"}), "saving offices");
+    // ── BLOCK A: send only the fields this device changed ──────────────────
+    const newIds=[], patchIds=[];
+    ids.forEach(id=>{
+      const o=store.offices[id]; if(!o) return;
+      // An office we've never seen from the server (locally created) needs the
+      // whole row; everything else gets a targeted patch.
+      (o.seed===false && DFIELDS[id] && DFIELDS[id].size ? patchIds : newIds).push(id);
+    });
+    const fullRows=newIds.map(id=>store.offices[id]).filter(Boolean).map(appToDb);
+    if(fullRows.length){
+      const {error}=await withTimeout(sb.from("offices").upsert(fullRows,{onConflict:"id"}), "saving offices");
       if(error) throw error;
+    }
+    // Guard 1: a big backlog (first sync after a long offline stretch) would fire
+    // one request per office. Past this many, batch as full rows instead.
+    if(patchIds.length>25){
+      const bulk=patchIds.map(id=>store.offices[id]).filter(Boolean).map(appToDb);
+      if(bulk.length){
+        const {error}=await withTimeout(sb.from("offices").upsert(bulk,{onConflict:"id"}), "saving offices");
+        if(error) throw error;
+      }
+      patchIds.length=0;
+    }
+    for(const id of patchIds){
+      const o=store.offices[id]; if(!o) continue;
+      const full=appToDb(o), keys=Array.from(DFIELDS[id]||[]);
+      const patch={};
+      // Map app field names -> db column names via appToDb's own output.
+      const MAPPED={name:"name",addr:"addr",city:"city",state:"state",zip:"zip",lat:"lat",lng:"lng",
+        county:"county",phone:"phone",email:"email",scanner:"scanner",lab:"lab",drs:"drs",hours:"hours",
+        visitDay:"visit_day",notes:"notes",visits:"visits",active:"active",addedBy:"added_by",
+        starterKit:"starter_kit",welcomeEmail:"welcome_email",pricelist:"pricelist"};
+      keys.forEach(k=>{ const col=MAPPED[k]; if(col && (col in full)) patch[col]=full[col]; });
+      if(!Object.keys(patch).length) continue;
+      // Guard 2: a patch matching NO row (office deleted or never reached the
+      // server) would vanish silently. .select() tells us what it actually hit;
+      // nothing hit -> fall back to writing the whole row.
+      const {data:hit,error}=await withTimeout(
+        sb.from("offices").update(patch).eq("id",id).select("id"), "saving offices");
+      if(error) throw error;
+      if(!hit || !hit.length){
+        const {error:e2}=await withTimeout(
+          sb.from("offices").upsert([appToDb(o)],{onConflict:"id"}), "saving offices");
+        if(e2) throw e2;
+      }
     }
     const logs=[];
     ids.forEach(id=>{
@@ -1087,14 +1170,18 @@ async function cloudPush(silent){
       parseVisits(o.visits).forEach(v=>{
         if(!v||!v.date) return;
         logs.push({
-          log_id:id+"|"+v.date, office_id:id,
+          // log_id includes the AUTHOR so two reps on the same day are two rows.
+          // A one-time SQL migration rewrites old "office|date" ids to match.
+          log_id:id+"|"+v.date+"|"+visitRepKey(v), office_id:id,
           office:o.name||"", city:o.city||"", visit_date:v.date,
           status:v.color==="green"?"Good":v.color==="yellow"?"Okay":v.color==="red"?"Poor":"",
           note:v.note||"", rep:v.rep||"",
           // Without this the row fails the RLS check (rep_id = auth.uid()) and the
           // visit is silently dropped. The ledger is the source of truth for every
           // report — a dropped visit here is a visit that never happened.
-          rep_id: sbUser ? sbUser.id : null
+          // The visit's OWN author, not whoever happens to be syncing. A rep
+          // syncing an office they didn't visit must not take the credit.
+          rep_id: (v.uid || (sbUser ? sbUser.id : null)) || null
         });
       });
     });
@@ -1104,7 +1191,7 @@ async function cloudPush(silent){
       const {error}=await withTimeout(sb.from("visit_log").upsert(logs,{onConflict:"log_id",ignoreDuplicates:true}), "saving visits");
       if(error) throw error;
     }
-    ids.forEach(id=>DIRTY.delete(id));
+    ids.forEach(id=>{ DIRTY.delete(id); clearFields(id); });
     persistDirty();
     lastSyncAt=Date.now(); lastSyncErr="";
     if(!silent) toast("Synced to team");
@@ -1127,6 +1214,19 @@ function cloudSubscribe(){
       .on("postgres_changes",{event:"*",schema:"public",table:"offices"},payload=>{
         const r=payload.new||payload.old; if(!r||!r.id) return;
         const id=String(r.id);
+        /* ═══ BLOCK B · REALTIME SCOPING ═══════════════════════════════════
+           Delete this if-block to go back to every device receiving every
+           change. A Texas phone has no use for an Illinois office update, and
+           a dashboard sync of thousands of rows fans out to every handset. */
+        try{
+          if(!store.offices[id] && !(isAdmin()&&allTerrOn())){
+            const terr=territoryStates();
+            if(terr.length){
+              const os=normStateName(r.state);
+              if(!os || terr.indexOf(os)<0) return;      // not our territory: ignore
+            }
+          }
+        }catch(e){}
         // ⭐ A claim of mine just turned into a closed sale — celebrate it.
         try{
           const prev=store.offices[id];
@@ -1241,9 +1341,13 @@ function _showLogin_unused(msg){
 async function cloudLoadReps(){
   if(!cloudOn||!sb) return;
   try{
-    const {data,error}=await sb.from("reps").select("id,name,email,role,active").eq("active",true);
+    // territory was MISSING from this select, so the whole state-scoping system
+    // silently fell back to guessing the rep's state from GPS.
+    const {data,error}=await sb.from("reps").select("id,name,email,role,active,territory").eq("active",true);
     if(error||!data||!data.length) return;
-    REPS=data.map(r=>({id:r.id,name:r.name,email:r.email||"",role:r.role||"rep"}));
+    REPS=data.map(r=>({id:r.id,name:r.name,email:r.email||"",role:r.role||"rep",territory:r.territory||""}));
+    // keep ME pointed at the refreshed record so territory takes effect now
+    try{ if(ME){ const mine=REPS.find(x=>String(x.id)===String(ME.id)); if(mine) ME=mine; } }catch(e){}
     saveReps();
   }catch(e){}
 }
@@ -1329,7 +1433,35 @@ let undoStack=[];
 /* ---------- persistence ---------- */
 function load(){ try{const r=localStorage.getItem(SK); if(r)store=JSON.parse(r);}catch(e){} if(!store.offices||typeof store.offices!=="object")store.offices={}; }
 // Local cache is now just an offline mirror; Postgres is the source of truth.
+/* ═══ BLOCK C · STORAGE EVICTION ═════════════════════════════════════════
+   Remove by deleting evictCold() and its call in save(). Offices accumulate in
+   localStorage as the rep pans around; browsers cap a site near 5 MB. We keep
+   anything that matters (unsynced, visited, claimed, closed, locally added) and
+   drop plain prospects beyond a cap — they reload instantly when back in view. */
+const KEEP_PROSPECTS=2500;
+function evictCold(){
+  try{
+    const all=Object.keys(store.offices||{});
+    if(all.length<=KEEP_PROSPECTS) return 0;
+    const cold=[];
+    all.forEach(id=>{
+      const o=store.offices[id]; if(!o) return;
+      if(DIRTY.has(id)) return;                                     // unsynced
+      if(o.claimedBy||o.closedAt) return;                           // claimed / closed
+      if(o.visits && (typeof o.visits==="string"?o.visits.trim():o.visits.length)) return;
+      if(o.notes && String(o.notes).trim()) return;
+      if(o.seed===false && !isImport(o)) { /* locally added */ }
+      cold.push(id);
+    });
+    const drop=cold.length-Math.max(0, KEEP_PROSPECTS-(all.length-cold.length));
+    if(drop<=0) return 0;
+    cold.slice(0, drop).forEach(id=>{ delete store.offices[id]; });
+    _lastBox="";                    // force a fresh viewport pull next pan
+    return drop;
+  }catch(e){ return 0; }
+}
 function save(silent){
+  evictCold();
   // Writing the local cache and pushing to the server are INDEPENDENT. The old
   // code returned early when localStorage was full, so the visit never reached
   // the database — the rep saw a warning and assumed it was only a local issue.
@@ -1357,9 +1489,38 @@ function save(silent){
   if(!silent && localOk) toast(cloudOn?"Saved & syncing":"Saved (offline — will sync)");
 }
 // Every write path funnels through here: patch the office, flag it dirty, push.
+/* ═══ BLOCK A · FIELD-LEVEL WRITES ═══════════════════════════════════════
+   Remove this block by deleting DFIELDS + its helpers and restoring the plain
+   upsert in cloudPush. Whole-row writes meant the last rep to sync clobbered
+   every field, including ones they never touched. We now remember the field
+   names each office actually changed and send only those. */
+const DFIELDS_KEY="salesly_dirty_fields";
+const DFIELDS=(function(){
+  try{ const o=JSON.parse(localStorage.getItem(DFIELDS_KEY)||"{}");
+       const m={}; Object.keys(o||{}).forEach(k=>m[k]=new Set(o[k]||[])); return m; }
+  catch(e){ return {}; }
+})();
+function persistDFields(){
+  try{ const o={}; Object.keys(DFIELDS).forEach(k=>o[k]=Array.from(DFIELDS[k]||[]));
+       localStorage.setItem(DFIELDS_KEY, JSON.stringify(o)); }catch(e){}
+}
+function markFields(id, keys){
+  if(!DFIELDS[id]) DFIELDS[id]=new Set();
+  (keys||[]).forEach(k=>DFIELDS[id].add(k));
+  persistDFields();
+}
+function clearFields(id){ delete DFIELDS[id]; persistDFields(); }
 function upsertLocal(id, patch){
   const cur=store.offices[id]||{id:id};
+  // Only record keys whose VALUE actually changed — an untouched form field
+  // re-submitted with the same value must not count as an edit.
+  const changed=Object.keys(patch||{}).filter(k=>{
+    const a=cur[k], b=patch[k];
+    if(a instanceof Object || b instanceof Object) return true;   // visits array etc.
+    return String(a==null?"":a)!==String(b==null?"":b);
+  });
   store.offices[id]=Object.assign({},cur,patch,{id:id});
+  if(changed.length) markFields(id, changed);
   DIRTY.add(id); persistDirty();
   return store.offices[id];
 }
@@ -1566,11 +1727,13 @@ function parseVisits(v){
   else if(typeof v==="string") arr=v.split(/[|,]/).map(s=>s.trim()).filter(Boolean);
   const out=arr.map(item=>{
     if(item&&typeof item==="object"){ const d=normDate(item.date); if(!d)return null;
-      return {date:d, color:(item.color||""), note:(item.note||""), rep:(item.rep||"")}; }
-    // string form: "date" or "date~color~note" or "date~color~note~rep"
+      return {date:d, color:(item.color||""), note:(item.note||""), rep:(item.rep||""), uid:(item.uid||"")}; }
+    // string form: "date" | "date~color~note" | "date~color~note~rep" | "date~color~note~rep~uid"
+    // The 5th field (uid) is the rep's Supabase login id. Names are for display;
+    // the uid is what attribution and closed-sale credit actually key on.
     const parts=String(item).split("~");
     const d=normDate(parts[0]); if(!d)return null;
-    return {date:d, color:(parts[1]||"").trim(), note:(parts[2]||"").trim(), rep:(parts[3]||"").trim()};
+    return {date:d, color:(parts[1]||"").trim(), note:(parts[2]||"").trim(), rep:(parts[3]||"").trim(), uid:(parts[4]||"").trim()};
   }).filter(Boolean);
   // newest first by date
   out.sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
@@ -1583,9 +1746,10 @@ function visitsToString(visits){
     // so strip them from free-text fields to avoid splitting a visit into pieces
     // (a comma in "call, then email" would otherwise truncate the note on read).
     const clean=s=>(s||"").replace(/[~|,]/g," ").replace(/\s+/g," ").trim();
-    const c=v.color||""; const n=clean(v.note); const r=clean(v.rep);
-    if(!c&&!n&&!r)return v.date;
-    // emit a 4th ~field only when a rep is present, so older readers still cope
+    const c=v.color||""; const n=clean(v.note); const r=clean(v.rep); const u=clean(v.uid);
+    if(!c&&!n&&!r&&!u)return v.date;
+    // Emit only as many ~fields as are needed, so older readers still cope.
+    if(u) return v.date+"~"+c+"~"+n+"~"+r+"~"+u;
     return r ? (v.date+"~"+c+"~"+n+"~"+r) : (n ? (v.date+"~"+c+"~"+n) : (v.date+"~"+c));
   }).join(" | ");
 }
@@ -1692,7 +1856,7 @@ function ensureVisitToday(visits, prevColor){
   const today=todayStr();
   visits=Array.isArray(visits)?visits.slice():[];
   if(visits.some(v=>v&&normDate(v.date)===today)) return visits;   // already logged today
-  visits.unshift({date:today, color:(prevColor||""), note:"", rep:meName()});
+  visits.unshift({date:today, color:(prevColor||""), note:"", rep:meName(), uid:myUid()});
   visits.sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
   return visits;
 }
@@ -1704,7 +1868,7 @@ function isMine(o){
   if(claimedByMe(o)) return true;
   const me=meName(); if(!me)return false;
   if((o.addedBy||"").toLowerCase()===me.toLowerCase())return true;
-  return !!(o.visits&&o.visits.some(v=>repMatch(v.rep,me)));
+  return !!(o.visits&&o.visits.some(visitIsMine));
 }
 // Shared: do the three stackable priority groups pass for this office?
 // They AND together; within Heat the selected colors OR together.
@@ -1748,8 +1912,8 @@ function secondaryPass(o){
 function repPass(o){
   const rf=Array.isArray(state.repFilter)?state.repFilter:[];
   if(!rf.length)return true;
-  const names=rf.map(n=>String(n).replace(/\s+/g," ").toLowerCase().trim());
-  return !!(o.visits&&o.visits.some(v=>names.indexOf(String(v.rep||"").replace(/\s+/g," ").toLowerCase().trim())>=0));
+  const objs=rf.map(n=>(REPS||[]).find(x=>x&&nameKey(x.name)===nameKey(n))||{name:n});
+  return !!(o.visits&&o.visits.some(v=>objs.some(r=>visitIsBy(v,r))));
 }
 // Location-based territory gate with a border cushion. A non-admin rep sees offices
 // in the state they're physically in (from GPS), PLUS any office within BORDER_MILES
@@ -1779,6 +1943,9 @@ function labDialPass(o){
   const os=normStateName(o.state);
   return !!os && sc.states.indexOf(os)>=0;
 }
+const ALLTERR_KEY="salesly_all_territories";
+function allTerrOn(){ try{ return localStorage.getItem(ALLTERR_KEY)==="1"; }catch(e){ return false; } }
+function setAllTerr(on){ try{ localStorage.setItem(ALLTERR_KEY, on?"1":"0"); }catch(e){} }
 function territoryPass(o){
   // NOTE: admins used to bypass all scoping here (return true), which is why an
   // admin standing in Illinois saw Houston, Denver, etc. — the whole national
@@ -1788,6 +1955,7 @@ function territoryPass(o){
   // Recognized states from the rep's Territory field ("Illinois", "IL", or a
   // comma-separated list all work). Empty when no territory is set OR the text
   // isn't a recognizable state — both fall back to the GPS behavior below.
+  if(isAdmin() && allTerrOn()) return true;   // admin opted into the national book
   const terr=territoryStates();
   if(terr.length){
     // Territory is authoritative: every rep on the same territory sees the exact
@@ -1965,7 +2133,8 @@ function renderInner(){
   // device is a non-admin rep (so on launch a rep sees their own stats, not team totals).
   let rf0=state.repFilter.length===1?String(state.repFilter[0]).replace(/\s+/g," ").toLowerCase().trim():"";
   if(!rf0 && ME && !(isAdmin&&isAdmin())){ rf0=String(ME.name||"").replace(/\s+/g," ").toLowerCase().trim(); }
-  const visitedByRep=(o)=>!!(o.visits&&o.visits.some(v=>repMatch(v.rep,rf0)));
+  const _rf0obj=(REPS||[]).find(x=>x&&nameKey(x.name)===nameKey(rf0))||{name:rf0};
+  const visitedByRep=(o)=>!!(o.visits&&o.visits.some(v=>visitIsBy(v,_rf0obj)));
   const addedByRep=(o)=>String(o.addedBy||"").replace(/\s+/g," ").toLowerCase().trim()===rf0;
   let tot,vis,personal,added,repName="";
   // Stats spec (same philosophy for every rep, present and future):
@@ -1997,7 +2166,7 @@ function renderInner(){
     tot=scoped.length;
     vis=scoped.filter(touched).length;
     const meN=String((typeof ME!=="undefined"&&ME&&ME.name)||"").replace(/\s+/g," ").toLowerCase().trim();
-    personal=meN?DB.filter(o=>o.visits&&o.visits.some(v=>repMatch(v.rep,meN))).length:0;
+    personal=meN?DB.filter(o=>o.visits&&o.visits.some(visitIsMine)).length:0;
     added=DB.filter(o=>!o.seed&&!isImport(o)&&addedByRep(o)).length;
   }
   document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · "+APP_VER;
@@ -3341,19 +3510,30 @@ function renderCalDayDetail(items, ds){
 // Apple/Google label the pin with the real address instead of reverse-geocoding
 // the coordinate (which can drop the house number and show just the street).
 function mapQuery(o){
-  const st=(o.state&&String(o.state).length>2)?stateAbbr2(o.state):(o.state||'IL');
+  const st=(o.state&&String(o.state).length>2)?stateAbbr2(o.state):(o.state||'');
   return [o.name,o.addr,o.city,st,o.zip].map(x=>String(x||'').trim()).filter(Boolean).join(', ');
 }
 function stateAbbr2(name){
-  const M={illinois:'IL',indiana:'IN',iowa:'IA',wisconsin:'WI',michigan:'MI',missouri:'MO',minnesota:'MN',kentucky:'KY',ohio:'OH'};
-  return M[String(name||'').toLowerCase()]||'IL';
+  const M={alabama:'AL',alaska:'AK',arizona:'AZ',arkansas:'AR',california:'CA',colorado:'CO',connecticut:'CT',
+    delaware:'DE','district of columbia':'DC',florida:'FL',georgia:'GA',hawaii:'HI',idaho:'ID',illinois:'IL',
+    indiana:'IN',iowa:'IA',kansas:'KS',kentucky:'KY',louisiana:'LA',maine:'ME',maryland:'MD',massachusetts:'MA',
+    michigan:'MI',minnesota:'MN',mississippi:'MS',missouri:'MO',montana:'MT',nebraska:'NE',nevada:'NV',
+    'new hampshire':'NH','new jersey':'NJ','new mexico':'NM','new york':'NY','north carolina':'NC',
+    'north dakota':'ND',ohio:'OH',oklahoma:'OK',oregon:'OR',pennsylvania:'PA','rhode island':'RI',
+    'south carolina':'SC','south dakota':'SD',tennessee:'TN',texas:'TX',utah:'UT',vermont:'VT',virginia:'VA',
+    washington:'WA','west virginia':'WV',wisconsin:'WI',wyoming:'WY'};
+  const k=String(name||'').toLowerCase().trim();
+  // Unknown -> return what we were given (or blank). NEVER default to Illinois:
+  // that silently relabeled every out-of-state office as IL.
+  return M[k] || (k.length===2 ? k.toUpperCase() : String(name||'').trim());
 }
 function mapEmbed(o){
   if(o.lat&&o.lng) return `https://maps.google.com/maps?q=${o.lat},${o.lng}&z=16&output=embed`;
-  return `https://maps.google.com/maps?q=${encodeURIComponent(o.name+' '+o.addr+' '+o.city+' IL '+o.zip)}&z=15&output=embed`;
+  const st2=(o.state&&String(o.state).length>2)?stateAbbr2(o.state):(o.state||'');
+  return `https://maps.google.com/maps?q=${encodeURIComponent([o.name,o.addr,o.city,st2,o.zip].filter(Boolean).join(' '))}&z=15&output=embed`;
 }
 function mapAppleLink(o){
-  const addr=[o.addr,o.city,(o.state&&String(o.state).length>2)?stateAbbr2(o.state):(o.state||'IL'),o.zip].map(x=>String(x||'').trim()).filter(Boolean).join(', ');
+  const addr=[o.addr,o.city,(o.state&&String(o.state).length>2)?stateAbbr2(o.state):(o.state||''),o.zip].map(x=>String(x||'').trim()).filter(Boolean).join(', ');
   // address= carries the full street (house number kept); ll= just positions the map.
   if(o.addr&&o.lat&&o.lng) return `https://maps.apple.com/?address=${encodeURIComponent(addr)}&ll=${o.lat},${o.lng}&q=${encodeURIComponent(o.name)}`;
   if(o.lat&&o.lng) return `https://maps.apple.com/?q=${encodeURIComponent(o.name)}&ll=${o.lat},${o.lng}`;
@@ -3557,7 +3737,7 @@ function openForm(id, prefill){
     // Stamp the current rep so the team can see who logged each visit.
     const ex=visits.find(x=>x.date===v);
     if(ex){ ex.color=pickColor||ex.color; if(note)ex.note=note; if(!ex.rep&&meName())ex.rep=meName(); toast("Updated visit on "+fmtDate(v)); }
-    else { visits.push({date:v,color:pickColor,note,rep:meName()}); toast("Visit logged"+(meName()?(" by "+meName()):"")+" — tap Save to keep it"); }
+    else { visits.push({date:v,color:pickColor,note,rep:meName(),uid:myUid()}); toast("Visit logged"+(meName()?(" by "+meName()):"")+" — tap Save to keep it"); }
     visits.sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
     pickColor=""; if(vcwrap) vcwrap.querySelectorAll('.vcolorbtn').forEach(x=>x.classList.remove('on'));
     if(vnEl) vnEl.value="";
@@ -3586,7 +3766,7 @@ function saveForm(id,getScan,getVisits,getActive){
   }
   let visits=parseVisits(getVisits?getVisits():[]);
   // Auto-fill: a brand-new office implies a visit today if the rep didn't log one.
-  if(!id && !visits.length) visits=[{date:todayStr(),color:"",note:"",rep:meName()}];
+  if(!id && !visits.length) visits=[{date:todayStr(),color:"",note:"",rep:meName(),uid:myUid()}];
   const data={name,addr:g('f_addr'),city,zip:g('f_zip'),
     lat:parseFloat(g('f_lat'))||"",lng:parseFloat(g('f_lng'))||"",
     phone:g('f_phone'),email:g('f_email'),scanner:getScan(),lab:g('f_lab'),
@@ -3671,7 +3851,7 @@ function buildCSV(onlyVisited){
   const head=["Practice Name","Address","City","State","ZIP","Latitude","Longitude","County","Phone","Email","Scanner","Current Lab","Doctors","Office Hours","Visit Day/Time","Visited","Active","Added By","Last Visited","Latest Status","Logged By (latest)","Visit Count","All Visit Dates","Notes","Lab Status"];
   const q=v=>{v=(v==null?"":String(v));return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
   const lines=[head.join(",")];
-  rows.forEach(o=>lines.push([o.name,o.addr,o.city,"IL",o.zip,o.lat,o.lng,o.county||"",o.phone,o.email,o.scanner,o.lab||"",o.drs,o.hours,o.visitDay,isVisited(o)?"Yes":"No",o.active===false?"Inactive":"Active",o.addedBy||"",lastVisit(o)?fmtDate(lastVisit(o)):"",heatOf(o)?VLABEL[heatOf(o)]:"",(o.visits&&o.visits.length&&o.visits[0].rep)?o.visits[0].rep:"",(o.visits&&o.visits.length)||0,(o.visits&&o.visits.length)?o.visits.map(v=>fmtDate(v.date)+(v.color?" ("+VLABEL[v.color]+")":"")+(v.rep?" "+v.rep:"")).join(" | "):"",stripLab(o.notes),LAB_LABEL[labStatus(o)]||""].map(q).join(",")));
+  rows.forEach(o=>lines.push([o.name,o.addr,o.city,((o.state&&String(o.state).length>2)?stateAbbr2(o.state):(o.state||"")),o.zip,o.lat,o.lng,o.county||"",o.phone,o.email,o.scanner,o.lab||"",o.drs,o.hours,o.visitDay,isVisited(o)?"Yes":"No",o.active===false?"Inactive":"Active",o.addedBy||"",lastVisit(o)?fmtDate(lastVisit(o)):"",heatOf(o)?VLABEL[heatOf(o)]:"",(o.visits&&o.visits.length&&o.visits[0].rep)?o.visits[0].rep:"",(o.visits&&o.visits.length)||0,(o.visits&&o.visits.length)?o.visits.map(v=>fmtDate(v.date)+(v.color?" ("+VLABEL[v.color]+")":"")+(v.rep?" "+v.rep:"")).join(" | "):"",stripLab(o.notes),LAB_LABEL[labStatus(o)]||""].map(q).join(",")));
   return {csv:lines.join("\r\n"),count:rows.length};
 }
 function downloadCSV(onlyVisited){
@@ -3825,6 +4005,133 @@ function computeOrdered(){
   renderRoute();
   showSheet();
 }
+/* ═══ BLOCK D · MANAGER VIEW + DATABASE-BACKED EXPORT ════════════════════
+   Remove by deleting openManager() + dbCSV() and the two buttons that call
+   them. The old export only covered offices loaded on THIS device (whatever
+   the map had pulled in). These query Postgres directly, so they cover the
+   whole book regardless of where the map happens to be. */
+function csvEscape(v){ v=(v==null?"":String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
+function rowsToCSV(rows, cols){
+  const head=cols.map(c=>c.label).join(",");
+  const body=rows.map(r=>cols.map(c=>csvEscape(r[c.key])).join(",")).join("\r\n");
+  return head+"\r\n"+body;
+}
+function saveCSV(name, csv){
+  try{
+    const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=name; document.body.appendChild(a); a.click();
+    setTimeout(()=>{ try{URL.revokeObjectURL(a.href); a.remove();}catch(e){} },1500);
+  }catch(e){ toast("⚠️ Couldn't save the file"); }
+}
+async function dbFetchAll(table, cols, apply){
+  // Page through so an export isn't silently capped at Supabase's row limit.
+  const out=[]; const SZ=1000;
+  for(let from=0; from<50000; from+=SZ){
+    let q=sb.from(table).select(cols).range(from, from+SZ-1);
+    if(apply) q=apply(q);
+    const {data,error}=await withTimeout(q, "loading "+table, 20000);
+    if(error) throw error;
+    out.push(...(data||[]));
+    if(!data || data.length<SZ) break;
+  }
+  return out;
+}
+function monthStartStr(back){
+  const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-(back||0));
+  return d.toISOString().slice(0,10);
+}
+async function openManager(){
+  if(!isAdmin()){ toast("Admins only"); return; }
+  if(!cloudOn||!sb){ toast("Connect to team sync first"); return; }
+  document.getElementById('sheetTitle').textContent="Team Report";
+  const body=document.getElementById('sheetBody');
+  const from=(_mgrFrom||monthStartStr(0)), to=(_mgrTo||todayStr());
+  body.innerHTML=`
+    <div class="row2" style="margin-bottom:10px;">
+      <div class="fld" style="margin-bottom:0;"><label>From</label><input id="mg_from" type="date" value="${from}"></div>
+      <div class="fld" style="margin-bottom:0;"><label>To</label><input id="mg_to" type="date" value="${to}"></div>
+    </div>
+    <div class="actions" style="margin:0 0 12px;">
+      <button class="btn btn-ghost" id="mg_month">This month</button>
+      <button class="btn btn-primary" id="mg_run">Run report</button>
+    </div>
+    <div id="mg_out" style="font-size:13px;color:var(--ink-soft);">Pick a range and tap Run report.</div>`;
+  const run=async()=>{
+    _mgrFrom=document.getElementById('mg_from').value||from;
+    _mgrTo=document.getElementById('mg_to').value||to;
+    const out=document.getElementById('mg_out');
+    out.innerHTML='<div style="padding:14px 0;">Loading…</div>';
+    try{
+      const visits=await dbFetchAll("visit_log","office_id,office,city,visit_date,status,note,rep,rep_id",
+        q=>q.gte("visit_date",_mgrFrom).lte("visit_date",_mgrTo));
+      const closed=await dbFetchAll("offices","id,name,city,state,claimed_by_name,claimed_at,closed_at,closed_status,closed_via",
+        q=>q.not("closed_at","is",null).gte("closed_at",_mgrFrom).lte("closed_at",_mgrTo+"T23:59:59"));
+      // roll up per rep
+      const by={};
+      visits.forEach(v=>{ const k=(v.rep||"(unattributed)").trim()||"(unattributed)";
+        by[k]=by[k]||{rep:k,visits:0,offices:new Set(),good:0,okay:0,poor:0,closed:0};
+        by[k].visits++; by[k].offices.add(String(v.office_id));
+        const st=String(v.status||"").toLowerCase();
+        if(st==="good")by[k].good++; else if(st==="okay")by[k].okay++; else if(st==="poor")by[k].poor++; });
+      closed.forEach(c=>{ const k=(c.claimed_by_name||"(unattributed)").trim()||"(unattributed)";
+        by[k]=by[k]||{rep:k,visits:0,offices:new Set(),good:0,okay:0,poor:0,closed:0}; by[k].closed++; });
+      const list=Object.values(by).sort((a,b)=>b.visits-a.visits);
+      out.innerHTML = list.length ? `
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <div class="dcard" style="flex:1;"><div class="dl">Visits</div><div class="dv">${visits.length.toLocaleString()}</div></div>
+          <div class="dcard" style="flex:1;"><div class="dl">Closed ★</div><div class="dv">${closed.length.toLocaleString()}</div></div>
+          <div class="dcard" style="flex:1;"><div class="dl">Reps</div><div class="dv">${list.length}</div></div>
+        </div>
+        ${list.map(r=>`<div class="dcard full" style="margin-bottom:6px;">
+          <div style="display:flex;align-items:baseline;gap:8px;">
+            <div class="dv" style="flex:1;">${esc(r.rep)}</div>
+            ${r.closed?`<span class="pill closedpill">★ ${r.closed}</span>`:''}
+          </div>
+          <div class="dl">${r.visits} visit${r.visits===1?'':'s'} · ${r.offices.size} office${r.offices.size===1?'':'s'}
+            · <span style="color:var(--green)">${r.good} good</span>
+            · <span style="color:var(--amber)">${r.okay} okay</span>
+            · <span style="color:var(--danger)">${r.poor} poor</span></div>
+        </div>`).join('')}
+        <div class="actions" style="margin-top:14px;">
+          <button class="btn btn-ghost" id="mg_csv_v">Export visits CSV</button>
+          <button class="btn btn-ghost" id="mg_csv_c">Export closed CSV</button>
+        </div>` : '<div style="padding:14px 0;">No visits in that range.</div>';
+      const cv=document.getElementById('mg_csv_v');
+      if(cv) cv.onclick=()=>saveCSV("salesly-visits-"+_mgrFrom+"-to-"+_mgrTo+".csv",
+        rowsToCSV(visits,[{key:"visit_date",label:"Date"},{key:"rep",label:"Rep"},{key:"office",label:"Office"},
+          {key:"city",label:"City"},{key:"status",label:"Rating"},{key:"note",label:"Note"},{key:"office_id",label:"Office ID"}]));
+      const cc=document.getElementById('mg_csv_c');
+      if(cc) cc.onclick=()=>saveCSV("salesly-closed-"+_mgrFrom+"-to-"+_mgrTo+".csv",
+        rowsToCSV(closed,[{key:"closed_at",label:"Closed"},{key:"claimed_by_name",label:"Rep"},{key:"name",label:"Office"},
+          {key:"city",label:"City"},{key:"state",label:"State"},{key:"closed_status",label:"Status"},
+          {key:"closed_via",label:"Credited via"},{key:"claimed_at",label:"Credited from"}]));
+    }catch(e){ out.innerHTML='<div style="color:var(--danger);padding:12px 0;">⚠️ '+esc((e&&e.message)||"Report failed")+'</div>'; }
+  };
+  document.getElementById('mg_run').onclick=run;
+  document.getElementById('mg_month').onclick=()=>{
+    document.getElementById('mg_from').value=monthStartStr(0);
+    document.getElementById('mg_to').value=todayStr(); run(); };
+  showSheet(); run();
+}
+let _mgrFrom="", _mgrTo="";
+// Whole book straight from the database, not just what this device has loaded.
+async function exportWholeBook(){
+  if(!cloudOn||!sb){ toast("Connect to team sync first"); return; }
+  toast("Building full export…");
+  try{
+    const rows=await dbFetchAll("offices",
+      "id,name,addr,city,state,zip,phone,email,scanner,lab,drs,status,tier,visits,notes,claimed_by_name,closed_at,closed_status");
+    saveCSV("salesly-full-book-"+todayStr()+".csv", rowsToCSV(rows,[
+      {key:"name",label:"Practice Name"},{key:"addr",label:"Address"},{key:"city",label:"City"},
+      {key:"state",label:"State"},{key:"zip",label:"ZIP"},{key:"phone",label:"Phone"},{key:"email",label:"Email"},
+      {key:"scanner",label:"Scanner"},{key:"lab",label:"Current Lab"},{key:"drs",label:"Doctors"},
+      {key:"status",label:"Lifecycle Status"},{key:"tier",label:"Tier"},{key:"claimed_by_name",label:"Credited Rep"},
+      {key:"closed_at",label:"Closed On"},{key:"closed_status",label:"Closed As"},
+      {key:"visits",label:"Visits"},{key:"notes",label:"Notes"}]));
+    toast("Exported "+rows.length.toLocaleString()+" offices");
+  }catch(e){ toast("⚠️ "+((e&&e.message)||"Export failed")); }
+}
 function openExport(){
   document.getElementById('sheetTitle').textContent="Export / Share";
   document.getElementById('sheetBody').innerHTML=`
@@ -3836,13 +4143,21 @@ function openExport(){
       <span><span class="et">Download visited only</span><span class="ed">CSV of offices you've visited / noted</span></span></button>
     <button class="exp-opt" id="ex_all">
       <span class="exp-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ink-soft)" stroke-width="2.2"><path d="M4 4h16v16H4zM4 9h16M9 4v16"/></svg></span>
-      <span><span class="et">Download full database</span><span class="ed">All ${DB.length.toLocaleString()} offices as CSV</span></span></button>
+      <span><span class="et">Download loaded offices</span><span class="ed">The ${DB.length.toLocaleString()} offices on this device right now</span></span></button>
+    <button class="exp-opt" id="ex_book">
+      <span class="exp-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--teal-deep)" stroke-width="2.2"><path d="M4 19V5a2 2 0 012-2h12v18H6a2 2 0 01-2-2zM8 7h8M8 11h8"/></svg></span>
+      <span><span class="et">Download FULL book (database)</span><span class="ed">Every office in every territory, straight from the server</span></span></button>
+    ${isAdmin()?`<button class="exp-opt" id="ex_mgr">
+      <span class="exp-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2.2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>
+      <span><span class="et">Team report</span><span class="ed">Visits and closed sales per rep for any date range</span></span></button>`:''}
     <div style="margin-top:16px;padding:13px;background:var(--amber-wash);border-radius:11px;font-size:12.5px;color:var(--ink-soft);line-height:1.5;">
       <b>iPhone tip:</b> "Share" opens the iOS share sheet — pick Mail to send the file straight to your marketing team, or AirDrop it. If sharing isn't available, the file downloads to Files and Mail opens for you to attach it.
     </div>`;
   const exShare=document.getElementById('ex_share'); if(exShare) exShare.onclick=()=>{hideSheet();setTimeout(emailCSV,250);};
   const exVis=document.getElementById('ex_visited'); if(exVis) exVis.onclick=()=>{downloadCSV(true);};
   const exAll=document.getElementById('ex_all'); if(exAll) exAll.onclick=()=>{downloadCSV(false);};
+  const exBook=document.getElementById('ex_book'); if(exBook) exBook.onclick=()=>{hideSheet();setTimeout(exportWholeBook,200);};
+  const exMgr=document.getElementById('ex_mgr'); if(exMgr) exMgr.onclick=()=>{openManager();};
   showSheet();
 }
 
@@ -3993,7 +4308,12 @@ function openWhoAmI(){
       Pick who's using this device. Your visits and added offices get stamped with your name so the team can see who did what. You can switch anytime in Team settings. (This identifies you on this device — it isn't a password.)
     </div>
     ${opts}
-    ${isAdmin()?`<button class="btn btn-ghost" id="wai_manage" style="width:100%;margin-top:8px;">Manage reps</button>`:''}`;
+    ${isAdmin()?`<button class="btn btn-ghost" id="wai_allterr" style="width:100%;margin-top:8px;">${allTerrOn()?'✓ Showing ALL territories':'Show all territories'}</button>
+    <button class="btn btn-ghost" id="wai_manage" style="width:100%;margin-top:8px;">Manage reps</button>`:''}`;
+  const at=document.getElementById('wai_allterr');
+  if(at) at.onclick=()=>{ const on=!allTerrOn(); setAllTerr(on);
+    toast(on?"Showing every territory":"Back to your territory");
+    try{ rebuild(); render(); }catch(e){} try{ openWhoAmI(); }catch(e){} };
   REPS.forEach(r=>{
     const b=document.querySelector('[data-me="'+r.id+'"]');
     if(b) b.onclick=()=>{
@@ -4013,12 +4333,25 @@ function openWhoAmI(){
 function openManageReps(){
   if(!isAdmin()){ toast("Only an admin can manage reps"); return; }
   document.getElementById('sheetTitle').textContent="Manage Reps";
-  const rows=REPS.map(r=>`<div class="dcard full" style="display:flex;align-items:center;gap:10px;">
-      <div style="flex:1;"><div class="dv">${esc(r.name)}${r.role==="admin"?' · Admin':''}</div><div class="dl">${esc(r.territory||'No territory')}</div></div>
-      ${r.id!=="ryan"?`<button class="visitdel" data-delrep="${esc(r.id)}">Remove</button>`:'<span class="dl">primary</span>'}
+  /* ═══ BLOCK E · SERVER-BACKED REP ADMIN ════════════════════════════════
+     Remove by restoring the old local-only row template and dropping the
+     data-terr / data-deact / data-reassign handlers below. "Remove" used to
+     delete the rep locally while leaving their Supabase login working, and
+     territory edits never reached the server at all. */
+  const rows=REPS.map(r=>`<div class="dcard full" style="margin-bottom:6px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="flex:1;min-width:0;"><div class="dv">${esc(r.name)}${r.role==="admin"?' · Admin':''}</div>
+          <div class="dl">${esc(r.territory||'⚠️ No territory — falls back to GPS')}</div></div>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <input class="terrin" data-terr="${esc(r.id)}" value="${esc(r.territory||'')}" placeholder="Territory (e.g. Texas)" style="flex:1 1 150px;min-width:0;">
+        <button class="cb-btn" data-saveterr="${esc(r.id)}">Save</button>
+        <button class="cb-btn" data-reassign="${esc(r.id)}">Reassign</button>
+        <button class="visitdel" data-deact="${esc(r.id)}">Deactivate</button>
+      </div>
     </div>`).join('');
   document.getElementById('sheetBody').innerHTML=`
-    <div style="font-size:13px;color:var(--ink-soft);line-height:1.5;margin-bottom:12px;">Add the reps on your team. Each picks their own name on their device. Territory is an optional state used as a default view filter when you expand to other states.</div>
+    <div style="font-size:13px;color:var(--ink-soft);line-height:1.5;margin-bottom:12px;">Reps come from Supabase. Create their login there first, then set the territory here — it controls which state's offices they see. Deactivating keeps all their history. <b>Territory is required once you work more than one state.</b></div>
     ${rows}
     <div class="dl" style="margin:16px 0 6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);">Add a rep</div>
     <div class="fld" style="margin-bottom:8px;"><input id="nr_name" placeholder="Name (e.g. Bill)"></div>
@@ -4042,9 +4375,50 @@ function openManageReps(){
         <button class="btn btn-primary" id="nr_pinsave">Save PIN</button>
       </div>
     </div>`;
-  REPS.forEach(r=>{ const b=document.querySelector('[data-delrep="'+r.id+'"]');
-    if(b) b.onclick=()=>{ if(!confirm("Remove "+r.name+"? Their past visits stay stamped with their name."))return;
-      REPS=REPS.filter(x=>x.id!==r.id); saveReps(); if(ME&&ME.id===r.id){ME=null;try{localStorage.removeItem(ME_KEY);}catch(e){}} updateMeBadge(); openManageReps(); }; });
+  const needCloud=()=>{ if(!cloudOn||!sb){ toast("Connect to team sync first"); return false; } return true; };
+  REPS.forEach(r=>{
+    const st=document.querySelector('[data-saveterr="'+r.id+'"]');
+    if(st) st.onclick=async()=>{
+      if(!needCloud()) return;
+      const inp=document.querySelector('[data-terr="'+r.id+'"]');
+      const val=(inp&&inp.value||"").trim();
+      try{
+        const {error}=await withTimeout(sb.rpc("admin_set_rep",{p_rep_id:r.id,p_territory:val}),"saving rep",12000);
+        if(error) throw error;
+        await cloudLoadReps(); rebuild(); render(); openManageReps();
+        toast(val?("Territory set to "+val):"Territory cleared");
+      }catch(e){ toast("⚠️ "+((e&&e.message)||"Couldn't save")); }
+    };
+    const de=document.querySelector('[data-deact="'+r.id+'"]');
+    if(de) de.onclick=async()=>{
+      if(!needCloud()) return;
+      if(!confirm("Deactivate "+r.name+"?\n\nThey stop appearing in Salesly, but every visit and closed sale they logged is KEPT. Also disable their login in Supabase Auth.")) return;
+      try{
+        const {error}=await withTimeout(sb.rpc("admin_set_rep",{p_rep_id:r.id,p_active:false}),"deactivating",12000);
+        if(error) throw error;
+        await cloudLoadReps();
+        if(ME&&ME.id===r.id){ME=null;try{localStorage.removeItem(ME_KEY);}catch(e){}}
+        updateMeBadge(); rebuild(); render(); openManageReps();
+        toast(r.name+" deactivated — remember to disable their Supabase login");
+      }catch(e){ toast("⚠️ "+((e&&e.message)||"Couldn't deactivate")); }
+    };
+    const ra=document.querySelector('[data-reassign="'+r.id+'"]');
+    if(ra) ra.onclick=async()=>{
+      if(!needCloud()) return;
+      const others=REPS.filter(x=>x.id!==r.id);
+      if(!others.length){ toast("No other rep to reassign to"); return; }
+      const who=prompt("Move "+r.name+"'s claimed & closed accounts to which rep?\n\n"+others.map(x=>"· "+x.name).join("\n"));
+      if(!who) return;
+      const tgt=others.find(x=>nameKey(x.name)===nameKey(who));
+      if(!tgt){ toast("No rep named \""+who+"\""); return; }
+      try{
+        const {data,error}=await withTimeout(sb.rpc("admin_reassign_accounts",{p_from:r.id,p_to:tgt.id}),"reassigning",15000);
+        if(error) throw error;
+        await cloudPull(); rebuild(); render();
+        toast("Moved "+(data||0)+" account"+((data===1)?"":"s")+" to "+tgt.name);
+      }catch(e){ toast("⚠️ "+((e&&e.message)||"Couldn't reassign")); }
+    };
+  });
   const back=document.getElementById('nr_back'); if(back) back.onclick=openWhoAmI;
   const pinBtn=document.getElementById('nr_pin');
   const pinForm=document.getElementById('nr_pinform');
