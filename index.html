@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA104 v104</title>
+<title>Salesly VDA105 v105</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -768,9 +768,64 @@ function normStateName(s){
 // GPS behavior — a mistyped territory degrades to "show what's around me", never
 // to an empty screen.
 const ALL_STATE_NAMES=Object.values(ST_ABBR_FULL);
-function territoryStates(){
+function assignedStates(){
   return repTerritory().split(/[,;/&|]+/).map(normStateName)
     .filter(s=>s&&ALL_STATE_NAMES.indexOf(s)>=0);
+}
+/* ══ TRAVEL STATE ════════════════════════════════════════════════════════════
+   A rep at a conference in another state should just see that state's offices,
+   without an admin editing their territory and remembering to undo it. So the
+   state they are PHYSICALLY IN is always allowed alongside their assigned one.
+
+   It is worked out from the offices already loaded around them — the nearest
+   pin's state, falling back to its ZIP — so there is no reverse-geocoding call.
+   That matters: the external geocoder has a usage policy that 20 phones would
+   breach, and it is the same class of service that already blocked our map
+   tiles. Cached until the rep moves 25+ miles, so panning costs nothing. */
+let _travelState="", _travelAt=null, _travelBusy=false;
+function deriveStateNearby(lat,lng){
+  let best=null, bestD=1e9;
+  for(const id in store.offices){
+    const o=store.offices[id];
+    if(!o || o.lat==null || o.lng==null) continue;
+    const d=haversine(lat,lng,o.lat,o.lng);
+    if(d<bestD){ bestD=d; best=o; }
+  }
+  if(!best || bestD>75) return "";           // nothing near enough to judge by
+  let st=normStateName(best.state||"");
+  if((!st || ALL_STATE_NAMES.indexOf(st)<0) && best.zip) st=normStateName(stateFromZip(best.zip)||"");
+  return (st && ALL_STATE_NAMES.indexOf(st)>=0) ? st : "";
+}
+function travelState(){
+  if(!userPos) return _travelState;
+  if(_travelBusy) return _travelState;                       // re-entry guard
+  if(_travelAt && _travelState && haversine(userPos.lat,userPos.lng,_travelAt.lat,_travelAt.lng)<25)
+    return _travelState;
+  _travelBusy=true;
+  try{
+    const st=deriveStateNearby(userPos.lat,userPos.lng);
+    if(st){
+      const prev=_travelState;
+      _travelState=st; _travelAt={lat:userPos.lat,lng:userPos.lng};
+      if(prev!==st){
+        const home=assignedStates();
+        if(home.length && home.indexOf(st)<0){
+          const nice=st.replace(/\b\w/g,c=>c.toUpperCase());
+          try{ toast("📍 Away from your territory — showing "+nice+" too"); }catch(e){}
+        }
+        try{ rebuild(); render(); }catch(e){}
+      }
+    }
+  }catch(e){}
+  _travelBusy=false;
+  return _travelState;
+}
+// Assigned territory PLUS wherever the rep currently is.
+function territoryStates(){
+  const home=assignedStates();
+  const here=travelState();
+  if(here && home.indexOf(here)<0) return home.concat([here]);
+  return home;
 }
 // LOCATION-BASED scoping: the rep sees offices for the state they're physically in.
 // We detect that state from GPS (reverse-geocoded once, re-checked when they move far)
@@ -779,12 +834,12 @@ let currentGeoState="";        // full state name detected from GPS, e.g. "Illin
 let _geoStateAt=null;          // {lat,lng} where we last detected, to avoid re-querying
 async function detectGeoState(lat,lng,force){
   if(lat==null||lng==null) return;
-  // Skip entirely when a territory is assigned: territoryPass() ignores the GPS
-  // state in that case, so the lookup is wasted. It also matters at scale —
-  // this hits OpenStreetMap's Nominatim, whose usage policy forbids heavy
-  // automated use, and 20 phones polling it is exactly how an app gets blocked
-  // (the same way the OSM tile servers blocked us).
-  try{ if(territoryStates().length) return; }catch(e){}
+  // Last resort only. travelState() normally answers this from offices already
+  // loaded nearby, at zero network cost. We only fall through to the external
+  // geocoder when that found nothing (a genuinely empty area) — its usage
+  // policy forbids heavy automated use, and it is the same kind of service
+  // that already blocked our map tiles.
+  try{ if(assignedStates().length && travelState()) return; }catch(e){}
   // Skip if we already detected near here (within ~15 miles) unless forced.
   if(!force && _geoStateAt && haversine(lat,lng,_geoStateAt.lat,_geoStateAt.lng)<15 && currentGeoState) return;
   try{
@@ -4308,6 +4363,13 @@ function openWhoAmI(){
       Pick who's using this device. Your visits and added offices get stamped with your name so the team can see who did what. You can switch anytime in Team settings. (This identifies you on this device — it isn't a password.)
     </div>
     ${opts}
+    ${(function(){ const h=assignedStates(), t=travelState();
+        if(!t || !h.length || h.indexOf(t)>=0) return '';
+        const nice=t.replace(/\b\w/g,c=>c.toUpperCase());
+        return `<div class="claimbox claimed" style="margin:10px 0 0;"><span class="cb-star hollow">📍</span>
+          <div class="cb-txt"><b>Traveling — ${esc(nice)} included</b>
+          <span class="cb-sub">You're outside your assigned territory, so ${esc(nice)} offices are showing too. This clears itself when you head home.</span></div></div>`;
+      })()}
     ${isAdmin()?`<button class="btn btn-ghost" id="wai_allterr" style="width:100%;margin-top:8px;">${allTerrOn()?'✓ Showing ALL territories':'Show all territories'}</button>
     <button class="btn btn-ghost" id="wai_manage" style="width:100%;margin-top:8px;">Manage reps</button>`:''}`;
   const at=document.getElementById('wai_allterr');
