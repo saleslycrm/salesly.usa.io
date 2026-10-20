@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA106 v106</title>
+<title>Salesly VDA107 v107</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1012,6 +1012,9 @@ function dbToApp(r){
     deletedAt:r.deleted_at||"",
     claimedBy:r.claimed_by||"", claimedByName:r.claimed_by_name||"",
     claimedAt:r.claimed_at||"", closedAt:r.closed_at||"", closedStatus:r.closed_status||"", closedVia:r.closed_via||"",
+    // hand-placed pin: locked against the dashboard's geocoder (see salesly_pin_lock.sql)
+    pinLocked:!!r.pin_locked, pinMovedBy:r.pin_moved_by||"", pinMovedAt:r.pin_moved_at||"",
+    origLat:(r.orig_lat!=null?r.orig_lat:null), origLng:(r.orig_lng!=null?r.orig_lng:null),
     seed:false
   };
 }
@@ -1030,7 +1033,12 @@ function appToDb(o){
     pricelist:o.pricelist||"",
     visits:visitsToString(parseVisits(o.visits)),
     active:o.active!==false,
-    added_by:o.addedBy||""
+    added_by:o.addedBy||"",
+    // A hand-placed pin. The database only honours these when pin_moved_at is
+    // NEWER than what it holds, so a phone sending an old copy can't undo a move.
+    pin_locked:!!o.pinLocked,
+    pin_moved_by:o.pinMovedBy||null,
+    pin_moved_at:o.pinMovedAt||null
     // tier is deliberately NOT written here. Tier is owned by the dashboard's
     // daily invoice upsert (S = invoiced customer). A rep editing an office in
     // the field must never silently demote a customer back to a prospect.
@@ -1083,6 +1091,15 @@ async function loadViewport(bounds, opts){
         const byId={}; (cl||[]).forEach(c=>byId[String(c.id)]=c);
         rows.forEach(r=>{ const c=byId[String(r.id)]; if(c) Object.assign(r,c); });
       }catch(e){ /* claims show on the next pull */ }
+    }
+    if(rows.length && !("pin_locked" in rows[0])){
+      try{
+        const {data:pl,error:pe}=await withTimeout(sb.from("offices")
+          .select("id,pin_locked,pin_moved_by,pin_moved_at,orig_lat,orig_lng")
+          .eq("pin_locked",true).limit(5000), "loading pins", 12000);
+        if(!pe){ const byId={}; (pl||[]).forEach(c=>byId[String(c.id)]=c);
+          rows.forEach(r=>{ const c=byId[String(r.id)]; if(c) Object.assign(r,c); }); }
+      }catch(e){ /* pin locks show on the next pull */ }
     }
     _lastBox=key;
     lastRawRows=rows.length;
@@ -1204,6 +1221,7 @@ async function cloudPush(silent){
       const MAPPED={name:"name",addr:"addr",city:"city",state:"state",zip:"zip",lat:"lat",lng:"lng",
         county:"county",phone:"phone",email:"email",scanner:"scanner",lab:"lab",drs:"drs",hours:"hours",
         visitDay:"visit_day",notes:"notes",visits:"visits",active:"active",addedBy:"added_by",
+        pinLocked:"pin_locked",pinMovedBy:"pin_moved_by",pinMovedAt:"pin_moved_at",
         starterKit:"starter_kit",welcomeEmail:"welcome_email",pricelist:"pricelist"};
       keys.forEach(k=>{ const col=MAPPED[k]; if(col && (col in full)) patch[col]=full[col]; });
       if(!Object.keys(patch).length) continue;
@@ -1690,6 +1708,78 @@ function labDoctorStatuses(o){
   });
   return out;
 }
+/* ══ REVENUE PER DOCTOR ══════════════════════════════════════════════════════
+   The dashboard already writes one 📊 LAB line per doctor, per practice:
+     "📊 LAB: ACTIVE · Dr. Smith · last case 09/28/2026 · 12 cases ·
+      $1,234 last 90d · $8,900 lifetime"
+   The app used to read only the status word. This reads the figures too, so a
+   rep can see at a glance whether a doctor is a strong account or sent one
+   case. The figures are per doctor AT THIS PRACTICE, as of the last sync.
+   Each field is read on its own, so an older line missing some of them still
+   shows whatever it does have. */
+function labDoctorFigures(o){
+  const nts=o&&o.notes; if(!nts) return [];
+  const money=v=>{ const n=parseFloat(String(v||'').replace(/[^0-9.]/g,'')); return isFinite(n)?n:null; };
+  const out=[];
+  String(nts).split("\n").forEach(l=>{
+    if(!/LAB:\s*[A-Za-z]/i.test(l)) return;
+    // a re-encoded separator arrives as "Â·" — drop the stray Â so it reads as ·
+    l=String(l).replace(/\u00C2(?=[\u00B7·])/g,'');
+    const sw=(l.match(/LAB:\s*([A-Za-z][A-Za-z ]*?)\s*(?:[·\u00B7]|$)/i)||[])[1]||'';
+    const w=sw.trim().toLowerCase(); let st='';
+    if(w.indexOf('new')===0) st='new'; else if(w.indexOf('winback')===0) st='winback';
+    else if(w.indexOf('falloff')===0) st='falloff'; else if(w.indexOf('inactive')===0) st='inactive';
+    else if(w.indexOf('active')===0||w.indexOf('current')===0) st='active';
+    const dr   =((l.match(/Dr\.?\s*([^·\u00B7\n]+?)\s*(?:[·\u00B7]|$)/i)||[])[1]||'').trim();
+    const last =((l.match(/last case\s*([0-9]{1,2}\/[0-9]{1,2}\/[0-9]{2,4})/i)||[])[1]||'');
+    const cases=(l.match(/([0-9][0-9,]*)\s*cases?\b/i)||[])[1];
+    const r90  =(l.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*last\s*90/i)||[])[1];
+    const life =(l.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*lifetime/i)||[])[1];
+    // added by dashboard DR1 — absent on lines written before it, and that's fine
+    const rmk  =(l.match(/([0-9]+(?:\.[0-9]+)?)\s*%\s*remakes?/i)||[])[1];
+    const tat  =(l.match(/([0-9]+(?:\.[0-9]+)?)\s*d\s*avg\s*turnaround/i)||[])[1];
+    out.push({ st, dr, last,
+      cases: cases!=null ? parseInt(String(cases).replace(/,/g,''),10) : null,
+      rev90: money(r90), lifetime: money(life),
+      remakePct: rmk!=null ? parseFloat(rmk) : null,
+      avgTat:    tat!=null ? parseFloat(tat) : null });
+  });
+  return out;
+}
+function fmtUSD(n){ return n==null ? '—' : '$'+Math.round(n).toLocaleString(); }
+function doctorsCardHTML(o){
+  const ds=labDoctorFigures(o).filter(d=>d.cases!=null||d.lifetime!=null||d.rev90!=null);
+  if(!ds.length) return '';
+  ds.sort((a,b)=>(b.lifetime||0)-(a.lifetime||0));
+  const tot=ds.reduce((t,d)=>({ cases:t.cases+(d.cases||0), rev90:t.rev90+(d.rev90||0), life:t.life+(d.lifetime||0) }),{cases:0,rev90:0,life:0});
+  const row=d=>`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line,#e8edec);">
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.dr?esc('Dr. '+d.dr):'This practice'}</div>
+        <div style="font-size:11.5px;color:#5c7370;margin-top:2px;">
+          ${d.st?`<span class="labchip lab-${d.st}" style="font-size:10px;padding:1px 6px;">${LAB_LABEL[d.st]||d.st}</span> `:''}
+          ${d.cases!=null?`${d.cases.toLocaleString()} case${d.cases===1?'':'s'}`:''}${d.last?` · last ${esc(d.last)}`:''}</div>
+        ${(d.remakePct!=null||d.avgTat!=null)?`<div style="font-size:11.5px;color:#5c7370;margin-top:2px;">
+          ${d.remakePct!=null?`<b style="color:var(--ink,#0f2a28);">${d.remakePct}%</b> remakes`:''}${(d.remakePct!=null&&d.avgTat!=null)?' · ':''}${d.avgTat!=null?`<b style="color:var(--ink,#0f2a28);">${d.avgTat}d</b> avg turnaround`:''}</div>`:''}
+      </div>
+      <div style="text-align:right;flex:0 0 auto;">
+        <div style="font-weight:800;font-size:14px;">${fmtUSD(d.lifetime)}</div>
+        <div style="font-size:11px;color:#5c7370;">${fmtUSD(d.rev90)} last 90d</div>
+      </div></div>`;
+  return `<div style="margin:12px 2px 6px;padding:10px 12px;border:1px solid var(--line,#e8edec);border-radius:12px;background:var(--surface,#fff);">
+    <div style="display:flex;align-items:baseline;gap:8px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft,#5c7370);flex:1;">Doctors at this practice</div>
+      ${ds.length>1?`<div style="font-size:11.5px;color:#5c7370;">practice total <b style="color:var(--ink,#0f2a28);">${fmtUSD(tot.life)}</b></div>`:''}
+    </div>
+    ${ds.map(row).join('')}
+    <div style="font-size:10.5px;color:#8aa09d;margin-top:6px;">At this practice · from the lab dashboard's last sync${ds.some(d=>d.remakePct!=null)?' · remakes measured by unit':''}</div>
+  </div>`;
+}
+function revenueLineHTML(o){
+  const ds=labDoctorFigures(o); if(!ds.length) return '';
+  const life=ds.reduce((t,d)=>t+(d.lifetime||0),0), cases=ds.reduce((t,d)=>t+(d.cases||0),0);
+  if(!life && !cases) return '';
+  return `<div style="font-size:12px;margin:2px 0 4px;"><b>${fmtUSD(life)}</b> lifetime · ${cases.toLocaleString()} case${cases===1?'':'s'}${ds.length>1?` · ${ds.length} doctors`:''}</div>`;
+}
 const ST_RANK={"new":5,winback:4,active:3,falloff:2,inactive:1};
 const ST_HEX={active:'#16a34a',"new":'#2563eb',winback:'#7c3aed',falloff:'#d97706',inactive:'#dc2626'};
 /* Distinct statuses on an office, highest-priority first. Multi-doctor notes
@@ -1731,6 +1821,70 @@ function labChip(o){
 }
 // Notes are shown/edited WITHOUT the machine-written 📊 LAB line; the line stays
 // in the stored value (it powers the tag + filters and the bridge maintains it).
+/* ══ MOVE PIN ═════════════════════════════════════════════════════════════════
+   Geocoding sometimes drops a pin on the highway or the next building. Any rep
+   can open an office, tap "Move pin", drag it (or tap the map) to the right
+   spot, and save. The database then LOCKS it: the dashboard's sync keeps
+   updating everything else but leaves the coordinates alone — unless the lab's
+   address for the office changes, in which case the practice moved and the pin
+   follows the new address. "Reset" puts it back where it was before. */
+let PINMOVE=null;
+function pinNoteHTML(o){
+  if(!o||!o.pinLocked) return '';
+  const when=o.pinMovedAt?fmtDate(String(o.pinMovedAt).slice(0,10)):'';
+  return `<div style="margin:6px 2px;padding:8px 10px;border-radius:10px;background:#f1f7f6;font-size:12px;color:#2f4f4c;display:flex;align-items:center;gap:8px;">
+    <span style="flex:1;">📍 Pin placed by hand${o.pinMovedBy?` by <b>${esc(o.pinMovedBy)}</b>`:''}${when?` on ${esc(when)}`:''}</span>
+    <button type="button" class="cb-btn" data-resetpin="${o.id}">Reset</button></div>`;
+}
+function startPinMove(id){
+  const o=officeById(id); if(!o) return;
+  const lat=parseFloat(o.lat), lng=parseFloat(o.lng);
+  if(!isFinite(lat)||!isFinite(lng)){ toast("This office has no pin yet — edit its address first"); return; }
+  hideSheet();
+  if(state.view!=="map"){ try{ setView("map"); }catch(e){} }
+  setTimeout(()=>{
+    if(!mapObj) return;
+    try{ mapObj.closePopup(); }catch(e){}
+    endPinMove(true);
+    mapObj.setView([lat,lng], Math.max(mapObj.getZoom(), 18));
+    const icon=L.divIcon({className:'',html:'<div style="font-size:34px;line-height:1;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35));transform:translateY(-6px);">📍</div>',iconSize:[34,34],iconAnchor:[17,32]});
+    const m=L.marker([lat,lng],{icon,draggable:true,zIndexOffset:2000,autoPan:true}).addTo(mapObj);
+    const onTap=e=>{ m.setLatLng(e.latlng); };
+    mapObj.on('click', onTap);
+    const bar=document.createElement('div');
+    bar.id='pinMoveBar';
+    bar.style.cssText='position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:3000;background:#0f2a28;color:#fff;border-radius:14px;padding:12px;display:flex;align-items:center;gap:8px;box-shadow:0 8px 24px rgba(0,0,0,.3);font-size:13px;';
+    bar.innerHTML=`<div style="flex:1;min-width:0;"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(o.name)}</b>Drag the 📍 or tap the map where the office really is.</div>
+      <button type="button" id="pinMoveCancel" style="font:inherit;font-weight:600;padding:9px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;">Cancel</button>
+      <button type="button" id="pinMoveSave" style="font:inherit;font-weight:700;padding:9px 14px;border-radius:10px;border:0;background:#2ec4b6;color:#0f2a28;">Save</button>`;
+    document.body.appendChild(bar);
+    document.getElementById('pinMoveCancel').onclick=()=>{ endPinMove(); openDetail(id); };
+    document.getElementById('pinMoveSave').onclick=()=>{
+      const ll=m.getLatLng();
+      upsertLocal(id,{ lat:+ll.lat.toFixed(6), lng:+ll.lng.toFixed(6), pinLocked:true,
+                       pinMovedBy:meName()||'', pinMovedAt:new Date().toISOString() });
+      endPinMove(); save(true); rebuild(); render(); openDetail(id);
+      toast("📍 Pin moved — it will stay put through future syncs");
+    };
+    PINMOVE={id, m, onTap, bar};
+  }, 250);
+}
+function endPinMove(silent){
+  if(!PINMOVE) return;
+  try{ mapObj.off('click', PINMOVE.onTap); }catch(e){}
+  try{ mapObj.removeLayer(PINMOVE.m); }catch(e){}
+  try{ PINMOVE.bar.remove(); }catch(e){}
+  PINMOVE=null;
+}
+function resetPin(id){
+  const o=officeById(id); if(!o) return;
+  if(!confirm("Put this pin back where it was before it was moved by hand?")) return;
+  const patch={ pinLocked:false, pinMovedBy:meName()||'', pinMovedAt:new Date().toISOString() };
+  if(o.origLat!=null && o.origLng!=null){ patch.lat=+o.origLat; patch.lng=+o.origLng; }
+  upsertLocal(id, patch);
+  save(true); rebuild(); render(); openDetail(id);
+  toast("📍 Pin reset");
+}
 function stripLab(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>!/LAB:\s*[A-Za-z]/i.test(l)).join("\n").replace(/^\n+|\n+$/g,""); }
 function labLines(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>/LAB:\s*[A-Za-z]/i.test(l)).join("\n"); }
 // Imported rows (bridge clients now; future bulk prospect dumps use ids starting
@@ -2670,6 +2824,7 @@ function popupHTML(o){
     <a class="popup-ad" href="${mapAppleLink(o)}" target="_blank" rel="noopener" style="text-decoration:none;display:block;">${esc(o.addr)}, ${esc(o.city)}</a>
     ${dist}
     ${effStatus(o)?`<div style="margin:2px 0 4px;">${labChip(o)}</div>`:''}
+    ${revenueLineHTML(o)}
     ${claimBlockHTML(o,true)}
     ${scOn?`<span class="popup-sc">${esc(o.scanner)}</span>`:''}
     ${noteBlock}
@@ -3624,6 +3779,8 @@ function openDetail(id){
     </div>
     ${effStatus(o)?`<div style="margin:10px 2px 2px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;">${labChip(o)}<span style="font-size:11px;color:#5c7370;flex:1 1 100%;">Lab pipeline status — per doctor, updated by the daily import</span></div>`:''}
     ${claimBlockHTML(o,false)}
+    ${doctorsCardHTML(o)}
+    ${pinNoteHTML(o)}
     <div class="dgrid">
       <div class="dcard full"><div class="dl">Address</div><a class="dv" href="${mapAppleLink(o)}" target="_blank" rel="noopener">${esc(o.addr)}, ${esc(o.city)}, IL ${esc(o.zip)}</a></div>
       <div class="dcard"><div class="dl">Phone</div>${o.phone?`<a class="dv" href="tel:${esc(o.phone)}">${esc(o.phone)}</a>`:'<div class="dv" style="color:var(--ink-faint)">—</div>'}</div>
@@ -3646,6 +3803,7 @@ function openDetail(id){
     <div class="actions">
       <button class="btn btn-primary" data-edit="${o.id}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 4H4v16h16v-7"/><path d="M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit / Add Notes</button>
+      <button class="btn btn-ghost" data-movepin="${o.id}">📍 Move pin</button>
       <button class="btn btn-danger" data-del="${o.id}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg> Delete</button>
     </div>`;
@@ -4580,6 +4738,8 @@ function wire(){
     const ed=e.target.closest('[data-edit]'); if(ed){openForm(ed.getAttribute('data-edit'));return;}
     const dl=e.target.closest('[data-del]'); if(dl){delOffice(dl.getAttribute('data-del'));return;}
     const cl=e.target.closest('[data-claim]'); if(cl){claimOffice(cl.getAttribute('data-claim'));return;}
+    const mp=e.target.closest('[data-movepin]'); if(mp){startPinMove(mp.getAttribute('data-movepin'));return;}
+    const rp=e.target.closest('[data-resetpin]'); if(rp){resetPin(rp.getAttribute('data-resetpin'));return;}
     const rl=e.target.closest('[data-release]'); if(rl){releaseOffice(rl.getAttribute('data-release'));return;}
   });
   on('btnAdd','click',()=>{
