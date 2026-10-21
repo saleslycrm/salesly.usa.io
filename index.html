@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA107 v107</title>
+<title>Salesly VDA109 v109</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -2626,9 +2626,10 @@ function buildMap(){
   // While a popup is open OR a cluster is spiderfied (expanded), DON'T let a GPS
   // refresh rebuild/recenter the map — that was collapsing the cluster before you
   // could tap a pin. Track both states and pause refresh accordingly.
-  mapObj.on('popupopen', ()=>{ _popupOpen=true; _interactAt=Date.now(); });
+  mapObj.on('popupopen', ()=>{ _popupOpen=true; _interactAt=Date.now(); try{ hidePanelForPopup(); }catch(e){} });
   mapObj.on('popupclose', ()=>{
     _popupOpen=false;
+    try{ restorePanelAfterPopup(); }catch(e){}
     // If office data refreshed while the popup was open we deferred the marker
     // rebuild so the popup wouldn't be destroyed under the user. Do it now.
     if(_mapDirty){ _mapDirty=false; setTimeout(()=>{ try{ render(); }catch(e){} }, 60); }
@@ -2849,23 +2850,127 @@ function makeMarker(o){
   // onboarding box) wouldn't show when the popup reopens.
   m.bindPopup(()=>popupHTML(officeById(o.id)||o),{
     minWidth:230, maxWidth:260,
-    autoPan:true, keepInView:true, autoPanPadding:L.point(24,90)
+    // Leaflet's own auto-pan is OFF: fitPopupInView does the one and only pan.
+    // Running both made two animations fight on every open (see fitPopupInView).
+    autoPan:false, keepInView:false
   });
-  // Center the map on the marker when its popup opens, so the card sits in the
-  // middle of the screen instead of wherever the pin happened to be.
+  // Fit the opened popup — and the pin under it — into the visible map.
   m.on('popupopen', function(){ try{ centerOnMarker(m); }catch(e){} });
   m._oid=o.id;
   return m;
 }
 // Pan (not zoom) so the marker — and therefore its popup — is centered in the
 // visible map area, accounting for the popup opening upward from the pin.
+/* ══ FIT AN OPEN POPUP INTO THE VISIBLE MAP ══════════════════════════════════
+   Opening a pin used to run TWO pans at once, pulling opposite ways:
+     • centerOnMarker centred the PIN — but the popup opens UPWARD from the pin,
+       so centring the pin pushed the top half of the popup off the map;
+     • Leaflet's auto-pan + keep-in-view then dragged the popup back into view.
+   They fought every time, and with the top panel open the popup (~480px) was
+   taller than the map left visible (~450px), so neither could win: it jumped,
+   then sat half-hidden under the panel.
+
+   Now there is ONE routine and ONE pan:
+     1. measure the map area actually visible — below anything overlapping its
+        top, above the Add Office bar / locate / route buttons at the bottom;
+     2. if the popup can't fit, cap its height and let it scroll inside;
+     3. pan once so the whole popup AND the pin beneath it sit centred there.
+   It also re-runs when the top panel opens or closes and on rotation, so an
+   open popup follows the map instead of sliding under the panel. */
+const POPUP_MARGIN=10, PIN_ALLOW=26;
+function _visibleMapBox(){
+  const mapEl=mapObj.getContainer(), m=mapEl.getBoundingClientRect();
+  let top=m.top, bottom=m.bottom;
+  // anything laid OVER the top edge of the map
+  ['header','#statbar','#filterbar'].forEach(sel=>{
+    const el=document.querySelector(sel); if(!el) return;
+    const r=el.getBoundingClientRect(); if(!r.height) return;
+    if(r.top<=top+1 && r.bottom>top && r.bottom<m.bottom) top=Math.max(top, r.bottom);
+  });
+  // buttons floating over the BOTTOM of the map
+  ['.fab','#locateBtn','#routeBtn'].forEach(sel=>{
+    const el=document.querySelector(sel); if(!el) return;
+    const r=el.getBoundingClientRect(); if(!r.height||!r.width) return;
+    if(r.top<bottom && r.top>m.top+(m.height/2)) bottom=Math.min(bottom, r.top);
+  });
+  return { top:top-m.top, bottom:bottom-m.top, width:m.width };
+}
+function fitPopupInView(popup){
+  if(!mapObj||!popup||!popup.isOpen||!popup.isOpen()) return;
+  const el=popup.getElement(); if(!el) return;
+  const box=_visibleMapBox();
+  // How far the pin reaches below the popup's tip — MEASURED, because pins
+  // differ (stars, colour drops, numbered route pins). Only falls back to a
+  // typical size if the pin can't be found.
+  let pinExtra=PIN_ALLOW;
+  try{
+    const src=popup._source, pe=src&&src.getElement&&src.getElement();
+    if(pe){ pinExtra=Math.max(0, Math.round(pe.getBoundingClientRect().bottom-el.getBoundingClientRect().bottom)); }
+  }catch(e){}
+  const room=(box.bottom-box.top)-2*POPUP_MARGIN-pinExtra;
+  const content=el.querySelector('.leaflet-popup-content');
+  const wrap=el.querySelector('.leaflet-popup-content-wrapper');
+  const tip=el.querySelector('.leaflet-popup-tip-container');
+  if(content&&wrap){
+    const chrome=Math.max(24, wrap.offsetHeight-content.offsetHeight);   // margins around the content
+    const tipH=tip?tip.offsetHeight:20;
+    const maxContent=Math.max(140, room-chrome-tipH);
+    if(content.scrollHeight>maxContent){
+      content.style.maxHeight=maxContent+'px';
+      content.style.overflowY='auto';
+      content.style.webkitOverflowScrolling='touch';
+    } else {
+      content.style.maxHeight=''; content.style.overflowY='';
+    }
+  }
+  // measure after the cap applies, then a single pan
+  requestAnimationFrame(()=>{
+    try{
+      const mr=mapObj.getContainer().getBoundingClientRect(), r=el.getBoundingClientRect();
+      const cx=((r.left+r.right)/2)-mr.left;
+      const cy=((r.top+r.bottom+pinExtra)/2)-mr.top;           // popup + pin, as one block
+      const dx=Math.round(cx-box.width/2);
+      const dy=Math.round(cy-(box.top+box.bottom)/2);
+      if(Math.abs(dx)>2||Math.abs(dy)>2) mapObj.panBy([dx,dy],{animate:true,duration:0.25});
+    }catch(e){}
+  });
+}
+/* ══ PANEL STEPS ASIDE FOR AN OPEN PIN ════════════════════════════════════════
+   With the top panel open, the map left for a popup is small. So opening a pin
+   collapses the panel, and closing the pin brings it back — the panel was open
+   for a reason (usually filters). Three details:
+     • tapping from one pin to another closes then opens; the restore waits a
+       moment so the panel doesn't flash open and shut in between;
+     • if the rep opens the panel themselves while a pin is up, that is their
+       choice — it is left alone when the pin closes;
+     • the rep's saved panel preference (localStorage) is never touched. */
+let _hdrAutoHidden=false, _hdrRestoreT=null;
+function _hdrSetCollapsed(on){
+  document.body.classList.toggle('hdr-collapsed', on);
+  // resize the map in place (no pan) — fitPopupInView then does the one pan
+  try{ if(mapObj) mapObj.invalidateSize({pan:false}); }catch(e){}
+}
+function hidePanelForPopup(){
+  clearTimeout(_hdrRestoreT);
+  if(!document.body.classList.contains('hdr-collapsed')){
+    _hdrSetCollapsed(true);
+    _hdrAutoHidden=true;
+  }
+}
+function restorePanelAfterPopup(){
+  if(!_hdrAutoHidden) return;
+  clearTimeout(_hdrRestoreT);
+  _hdrRestoreT=setTimeout(()=>{
+    if(mapObj && mapObj._popup && mapObj._popup.isOpen()) return;   // another pin opened meanwhile
+    _hdrAutoHidden=false;
+    _hdrSetCollapsed(false);
+  }, 250);
+}
+// kept under its old name so every existing caller gets the new behaviour
 function centerOnMarker(m){
   if(!mapObj||!m) return;
-  var ll=m.getLatLng();
-  var pt=mapObj.latLngToContainerPoint(ll);
-  // nudge the target point down a touch so the upward-opening popup is centered
-  var target=mapObj.containerPointToLatLng(L.point(pt.x, pt.y));
-  mapObj.panTo(target, {animate:true, duration:0.25});
+  const p=m.getPopup&&m.getPopup();
+  setTimeout(()=>{ try{ fitPopupInView(p); }catch(e){ try{ mapObj.panInside(m.getLatLng()); }catch(_){} } }, 30);
 }
 // On-map route overlay removed by request: the planned route is shown in the
 // route panel list and handed to Apple Maps for navigation. These remain as
@@ -3005,7 +3110,7 @@ function _drawRouteBase(coordsLatLng, ordered, noFit){
     const first=(i===0);
     const icon=L.divIcon({className:'',html:`<div class="routepin${first?' first':''}">${i+1}</div>`,iconSize:first?[32,32]:[26,26],iconAnchor:first?[16,16]:[13,13],popupAnchor:[0,-14]});
     const m=L.marker([+o.lat,+o.lng],{icon,zIndexOffset:first?2000:1500});
-    m.bindPopup(()=>popupHTML(o),{minWidth:230,maxWidth:260,autoPan:true,keepInView:true,autoPanPadding:L.point(24,90)});
+    m.bindPopup(()=>popupHTML(o),{minWidth:230,maxWidth:260,autoPan:false,keepInView:false});
     m.on('popupopen', function(){ try{ centerOnMarker(m); }catch(e){} });
     m._oid=o.id; m.addTo(routeLayer);
   });
@@ -4763,6 +4868,7 @@ function wire(){
   on('btnSync','click',openSync);
   on('meBadge','click',openWhoAmI);
   on('hdrToggle','click',()=>{
+    _hdrAutoHidden=false; clearTimeout(_hdrRestoreT);   // the rep's own tap wins over the auto-hide
     const collapsed=document.body.classList.toggle('hdr-collapsed');
     try{ localStorage.setItem('hdr_collapsed', collapsed?'1':'0'); }catch(e){}
     _refitMapSoon(); setTimeout(_refitMapSoon,260);
@@ -5014,6 +5120,8 @@ function _refitMapSoon(){
   if(_vpResizeT) clearTimeout(_vpResizeT);
   _vpResizeT=setTimeout(()=>{
     try{ if(mapObj && state.view==="map"){ mapObj.invalidateSize(false); } }catch(e){}
+    // the visible map just changed size — move an open popup back into it
+    try{ if(mapObj && mapObj._popup && mapObj._popup.isOpen()) fitPopupInView(mapObj._popup); }catch(e){}
   },180);
 }
 window.addEventListener('resize', _refitMapSoon);
