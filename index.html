@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA109 v109</title>
+<title>Salesly VDA110 v110</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -520,7 +520,6 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
     <input id="search" type="search" placeholder="Search offices, cities, doctors…" autocomplete="off">
   </div>
 </header>
-<div class="statbar" id="statbar"></div>
 <div class="ctrlwrap" id="filterbar">
   <div class="iconrow">
     <button class="ficon" data-grp="visit">
@@ -2387,7 +2386,11 @@ function renderInner(){
     added=DB.filter(o=>!o.seed&&!isImport(o)&&addedByRep(o)).length;
   }
   document.getElementById('subline').textContent=tot.toLocaleString()+" offices · "+new Set(scoped.map(o=>o.city)).size+" cities · "+APP_VER;
-  document.getElementById('statbar').innerHTML=
+  // The Offices / Visited / My Visits / Added bar was removed (VDA110) to give
+  // the map more room; the office and city counts stay in the line above. The
+  // write below is guarded so it does nothing now the element is gone.
+  const _sb=document.getElementById('statbar');
+  if(_sb) _sb.innerHTML=
     `<div class="stat"><div class="sv">${tot.toLocaleString()}</div><div class="sl">Offices</div></div>
      <div class="stat v"><div class="sv">${vis}</div><div class="sl">Visited</div></div>
      <div class="stat s"><div class="sv">${personal}</div><div class="sl">${repName?esc(repName.split(" ")[0])+"'s Visits":"My Visits"}</div></div>
