@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA110 v110</title>
+<title>Salesly VDA111 v111</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -144,6 +144,21 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:calc
 .cityrow.open .officelist{display:block;}
 
 .office{padding:13px 16px 13px 22px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;max-width:100%;overflow:hidden;}
+/* VDA111: an office in the same building as the one above — tucked under it */
+.office.samebld{padding-left:40px;border-top-style:dashed;}
+.office.samebld .otitle::before{content:"↳ ";color:var(--ink-soft);font-weight:400;}
+.bld-pop .leaflet-popup-content{margin:10px 10px;}
+.bld-head{font-weight:800;font-size:13px;margin:0 4px 6px;}
+.bld-list{display:flex;flex-direction:column;}
+.bld-row{display:flex;align-items:center;gap:9px;width:100%;text-align:left;font:inherit;padding:9px 6px;border:none;border-top:1px solid var(--line);background:none;cursor:pointer;color:inherit;}
+.bld-row:active,.bld-row:hover{background:rgba(0,0,0,.04);}
+.bld-pin{flex:none;transform:none!important;position:static!important;margin:0;}
+.bld-txt{flex:1;min-width:0;display:flex;flex-direction:column;}
+.bld-txt b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bld-txt small{font-size:11.5px;color:var(--ink-soft);}
+.bld-tag{font-size:11px;font-weight:700;color:var(--ink-soft);white-space:nowrap;}
+.bld-tag.closed{color:#b45309;}
+.bld-back{display:block;width:100%;text-align:left;font:inherit;font-size:12px;font-weight:700;padding:2px 0 8px;margin-bottom:6px;border:none;border-bottom:1px solid var(--line);background:none;color:var(--ink-soft);cursor:pointer;}
 html,body{overflow-x:hidden;}
 #main{overflow-x:hidden;}
 .pracgrp{border-top:1px solid var(--line);}
@@ -2415,6 +2430,10 @@ function renderInner(){
   // Normalize a practice name for grouping (case/space/punct-insensitive).
   // Defined inline so it's available even before other helpers load.
   window.sbNormName=window.sbNormName||function(n){return String(n||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();};
+  // VDA111: offices in a city run in STREET order — street name, house number,
+  // then suite — so every suite at 123 North Road sits together, in order,
+  // however the address was typed ("N Rd", "North Road", "Ste", "#").
+
   // group by city (null-safe: synced/added offices may have blank fields)
   const cities={};
   filtered.forEach(o=>{const c=(o.city||"Uncategorized");(cities[c]=cities[c]||[]).push(o);});
@@ -2424,7 +2443,7 @@ function renderInner(){
 
   let html="";
   names.forEach(city=>{
-    const list=cities[city].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
+    const list=cities[city].sort(sbAddrCmp);
     const open=forceOpen||state.openCity===city;
     html+=`<div class="cityrow${open?' open':''}" data-city="${esc(city)}">
       <button class="cityhdr" data-cityhdr="${esc(city)}">
@@ -2434,9 +2453,10 @@ function renderInner(){
       </button>
       <div class="officelist">`;
     // Roll up multiple locations that share a practice name into one group.
-    const officeHTML=o=>{
+    // `same` = this office is in the same building as the one listed above it
+    const officeHTML=(o,same)=>{
       const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!=="";
-      return `<button class="office" data-open="${o.id}">
+      return `<button class="office${same===true?' samebld':''}" data-open="${o.id}"${same===true?' title="Same building as the office above"':''}>
         <div class="badges">
           <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
         </div>
@@ -2448,8 +2468,10 @@ function renderInner(){
     // bucket by normalized name, preserving first-seen order
     const groups=new Map();
     list.forEach(o=>{ const k=sbNormName(o.name); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(o); });
+    let prevBld=null;
     groups.forEach(offs=>{
-      if(offs.length===1){ html+=officeHTML(offs[0]); return; }
+      if(offs.length===1){ const k=sbBldKey(offs[0]); html+=officeHTML(offs[0], !!k&&k===prevBld); prevBld=k; return; }
+      prevBld=null;
       // multi-location practice → collapsible sub-group
       const gkey=city+'|'+sbNormName(offs[0].name);
       const gopen=forceOpen||PRAC_OPEN.has(gkey);
@@ -2461,13 +2483,31 @@ function renderInner(){
           <span class="pracnm">${esc(offs[0].name)}</span>
           <span class="praccnt">${offs.length}</span>
         </button>
-        <div class="pracsub">${offs.map(officeHTML).join('')}</div>
+        <div class="pracsub">${offs.map(o=>officeHTML(o)).join('')}</div>
       </div>`;
     });
     html+=`</div></div>`;
   });
   main.innerHTML=html;
 }
+
+/* ---------- Addresses, in the order a rep walks them (VDA111) ---------- */
+const SB_ABBR={north:'n',south:'s',east:'e',west:'w',road:'rd',street:'st',avenue:'ave',av:'ave',boulevard:'blvd',drive:'dr',lane:'ln',
+  court:'ct',parkway:'pkwy',highway:'hwy',place:'pl',circle:'cir',terrace:'ter',square:'sq',trail:'trl'};
+function sbAddrParts(a){
+  let s=String(a||'').toLowerCase().replace(/[.,]/g,' ').replace(/\s+/g,' ').trim(), suite='';
+  const sm=s.match(/\s(?:#|ste|suite|unit|apt|bldg|building|fl|floor|rm|room|spc|space)\s*#?\s*([a-z0-9-]+)\s*$/)||s.match(/\s#\s*([a-z0-9-]+)/);
+  if(sm){ suite=sm[1]; s=(s.slice(0,sm.index)+' '+s.slice(sm.index+sm[0].length)).trim(); }
+  const m=s.match(/^(\d+)([a-z]?)\s+(.*)$/);
+  return { num: m?+m[1]:Infinity, street:(m?m[3]:s).split(' ').map(w=>SB_ABBR[w]||w).join(' '), suite };
+}
+const sbNat=(a,b)=>String(a||'').localeCompare(String(b||''),undefined,{numeric:true,sensitivity:'base'});
+function sbAddrCmp(x,y){
+  const a=sbAddrParts(x.addr), b=sbAddrParts(y.addr);
+  return sbNat(a.street,b.street)||(a.num-b.num)||sbNat(a.suite,b.suite)||sbNat(x.name,y.name);
+}
+// "123 n rd" — the building, without the suite; '' when there's no house number
+function sbBldKey(o){ const p=sbAddrParts(o.addr); return p.num===Infinity?'':p.num+' '+p.street; }
 
 /* ---------- Map view ---------- */
 function pinClass(o){ const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!==""; return isVisited(o)?"visited":(scOn?"scanner":""); }
@@ -2610,8 +2650,18 @@ function buildMap(){
   tileLayerObj.on('tileerror', ()=>{ _tileFails++; scheduleTileRecover(); });
   tileLayerObj.on('tileload',  ()=>{ _tileFails=0; });
   tileLayerObj.addTo(mapObj);
-  clusterLayer=L.markerClusterGroup({chunkedLoading:true,maxClusterRadius:50,spiderfyOnMaxZoom:true});
+  // VDA111: the balloon library's own tap handling (zoom, zoom, zoom… then fan the
+  // pins out) is off; one handler decides instead. Offices in ONE building can
+  // never split apart, so their balloon opens the building's list on the first tap.
+  clusterLayer=L.markerClusterGroup({chunkedLoading:true,maxClusterRadius:50,spiderfyOnMaxZoom:false,zoomToBoundsOnClick:false});
   mapObj.addLayer(clusterLayer);
+  clusterLayer.on('clusterclick', e=>{
+    const c=e.layer, ms=c.getAllChildMarkers(), first=ms[0].getLatLng();
+    if(ms.length>1 && ms.every(m=>mapObj.distance(first,m.getLatLng())<40)){ showBuildingList(ms.map(m=>m._oid), c.getLatLng()); return; }
+    let bottom=c; while(bottom._childClusters && bottom._childClusters.length===1) bottom=bottom._childClusters[0];
+    if(bottom._zoom===clusterLayer._maxZoom && bottom._childCount===c._childCount) c.spiderfy();   // can't split any further
+    else c.zoomToBounds({padding:[24,24]});
+  });
   mapObj.on('popupopen', wirePopup);
   // THE BOTTLENECK FIX. Every pan/zoom re-asks Postgres for just what's on screen.
   // Debounced so a flick-pan fires one query, not thirty. S-tier always comes back;
@@ -2843,6 +2893,35 @@ function popupHTML(o){
       <button class="popup-btn ghost" data-pop-edit="${o.id}">Edit</button>
     </div>`;
 }
+/* One building's offices, as a list in a popup (VDA111). Tap a row for that
+   office's usual popup — View / Edit / Note / Claim all work — with a link back. */
+function bldName(offs){
+  const c=new Map();
+  offs.forEach(o=>{ const a=String(o.addr||'').replace(/\s*(?:,|#|\b(?:ste|suite|unit|apt|bldg|fl|floor|rm|room)\b).*$/i,'').trim(); if(a) c.set(a,(c.get(a)||0)+1); });
+  const best=[...c.entries()].sort((a,b)=>b[1]-a[1]||b[0].length-a[0].length)[0];
+  return best?best[0]:'this address';
+}
+function showBuildingList(ids, latlng){
+  const offs=ids.map(id=>officeById(id)).filter(Boolean).sort(sbAddrCmp);
+  if(!offs.length) return;
+  const where=bldName(offs);
+  const rows=offs.map(o=>{
+    const tag=isClosed(o)?'<span class="bld-tag closed">★ Closed</span>':(isClaimed(o)?`<span class="bld-tag">☆ ${claimedByMe(o)?'Mine':esc((o.claimedByName||'').split(' ')[0]||'Claimed')}</span>`:'');
+    return `<button class="bld-row" data-bld-open="${esc(o.id)}"><span class="pin ${pinClass(o)} bld-pin" ${pinStyle(o)}></span>
+      <span class="bld-txt"><b>${esc(o.name||'Unnamed office')}</b><small>${esc(o.addr||'')}</small></span>${tag}</button>`;
+  }).join('');
+  const pop=L.popup({minWidth:230,maxWidth:280,maxHeight:300,autoPan:true,className:'bld-pop'}).setLatLng(latlng)
+    .setContent(`<div class="bld-head">${offs.length} offices at ${esc(where)}</div><div class="bld-list">${rows}</div>`).openOn(mapObj);
+  const el=pop.getElement();
+  if(el) el.querySelectorAll('[data-bld-open]').forEach(b=>b.onclick=()=>{
+    const o=officeById(b.getAttribute('data-bld-open')); if(!o) return;
+    const p2=L.popup({minWidth:230,maxWidth:260,autoPan:true}).setLatLng(latlng)
+      .setContent(`<button class="bld-back" data-bld-back>← All ${offs.length} offices at ${esc(where)}</button>`+popupHTML(o)).openOn(mapObj);
+    const el2=p2.getElement(), back=el2&&el2.querySelector('[data-bld-back]');
+    if(back) back.onclick=()=>showBuildingList(ids, latlng);
+  });
+}
+
 function makeMarker(o){
   const icon=isClosed(o)
     ? L.divIcon({className:'',html:`<div class="pin-closed" title="Closed sale">★</div>`,iconSize:[24,24],iconAnchor:[12,14],popupAnchor:[0,-12]})
