@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA111 v111</title>
+<title>Salesly VDA112 v112</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -146,6 +146,18 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:calc
 .office{padding:13px 16px 13px 22px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;max-width:100%;overflow:hidden;}
 /* VDA111: an office in the same building as the one above — tucked under it */
 .office.samebld{padding-left:40px;border-top-style:dashed;}
+/* VDA112: Nearest first */
+.listbar{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2;}
+.lb-seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;}
+.lb-seg button{font:600 13px var(--sans);padding:7px 12px;background:var(--surface);color:var(--ink-soft);border:none;}
+.lb-seg button+button{border-left:1px solid var(--line-strong);}
+.lb-seg button.on{background:var(--teal);color:#fff;}
+.lb-btn{font:600 13px var(--sans);padding:7px 11px;border-radius:10px;border:1px solid var(--line-strong);background:var(--surface);color:var(--teal-deep);}
+.lb-note{font-size:12px;color:var(--ink-faint);}
+.nearband{border-bottom:1px solid var(--line);background:var(--surface);}
+.nearhdr{display:flex;align-items:center;gap:10px;padding:12px 16px 8px;}
+.odist{flex:none;font-family:var(--mono);font-size:12px;font-weight:500;color:var(--teal-deep);background:var(--teal-wash);padding:2px 7px;border-radius:8px;white-space:nowrap;}
+.lb-more{display:block;width:calc(100% - 28px);margin:12px 14px;padding:10px;font:600 13px var(--sans);border-radius:10px;border:1px dashed var(--line-strong);background:var(--surface);color:var(--ink-soft);}
 .office.samebld .otitle::before{content:"↳ ";color:var(--ink-soft);font-weight:400;}
 .bld-pop .leaflet-popup-content{margin:10px 10px;}
 .bld-head{font-weight:800;font-size:13px;margin:0 4px 6px;}
@@ -643,7 +655,7 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 <script>
 /* SEED_B64 removed — the office book now lives in Postgres, not baked into this file. */
 const SK="ildental_v2";        // overrides+additions+deletions
-const SCANNERS=["iTero","Trios","Dscore","Medit","Allied Star","Other","None"];
+const SCANNERS=["iTero","Trios","Dscore","Medit","Shining 3D","Dexis","CEREC","Allied Star","Other","None"];   // VDA112: + Shining 3D, Dexis, CEREC
 
 /* ---------- reps / users ----------
    Attribution, not authentication. The rep list is shared (kept in sync via the
@@ -2434,6 +2446,8 @@ function renderInner(){
   // then suite — so every suite at 123 North Road sits together, in order,
   // however the address was typed ("N Rd", "North Road", "Ste", "#").
 
+  // VDA112: nearest first when the rep's location is known (falls through to the city list otherwise)
+  if(listSortMode()==='near' && renderNearList(filtered, main)) return;
   // group by city (null-safe: synced/added offices may have blank fields)
   const cities={};
   filtered.forEach(o=>{const c=(o.city||"Uncategorized");(cities[c]=cities[c]||[]).push(o);});
@@ -2441,7 +2455,7 @@ function renderInner(){
   // auto-open when searching/filtering narrows things
   const forceOpen=(state.q||state.filter.length)&&filtered.length<120;
 
-  let html="";
+  let html=listBarHTML(listSortMode());
   names.forEach(city=>{
     const list=cities[city].sort(sbAddrCmp);
     const open=forceOpen||state.openCity===city;
@@ -2454,17 +2468,7 @@ function renderInner(){
       <div class="officelist">`;
     // Roll up multiple locations that share a practice name into one group.
     // `same` = this office is in the same building as the one listed above it
-    const officeHTML=(o,same)=>{
-      const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!=="";
-      return `<button class="office${same===true?' samebld':''}" data-open="${o.id}"${same===true?' title="Same building as the office above"':''}>
-        <div class="badges">
-          <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
-        </div>
-        <div class="onm"><div class="otitle">${esc(o.name)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
-        ${isClosed(o)?'<span class="pill closedpill">★ Closed</span>':(isClaimed(o)?`<span class="pill claimpill">☆ ${claimedByMe(o)?'Mine':esc((o.claimedByName||'').split(' ')[0]||'Claimed')}</span>`:'')}${labChipCompact(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
-        ${stripLab(o.notes)?'<span class="dot note"></span>':''}
-      </button>`;
-    };
+    const officeHTML=(o,same)=>officeRowHTML(o,same);
     // bucket by normalized name, preserving first-seen order
     const groups=new Map();
     list.forEach(o=>{ const k=sbNormName(o.name); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(o); });
@@ -2490,6 +2494,84 @@ function renderInner(){
   });
   main.innerHTML=html;
 }
+
+/* One office row in the list — shared by the By-city and Nearest-first lists (VDA112).
+   `same` = in the same building as the row above it; `dist` = miles from the rep. */
+function officeRowHTML(o,same,dist){
+      const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!=="";
+      return `<button class="office${same===true?' samebld':''}" data-open="${o.id}"${same===true?' title="Same building as the office above"':''}>
+        <div class="badges">
+          <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
+        </div>
+        <div class="onm"><div class="otitle">${esc(o.name)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
+        ${isClosed(o)?'<span class="pill closedpill">★ Closed</span>':(isClaimed(o)?`<span class="pill claimpill">☆ ${claimedByMe(o)?'Mine':esc((o.claimedByName||'').split(' ')[0]||'Claimed')}</span>`:'')}${labChipCompact(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
+        ${stripLab(o.notes)?'<span class="dot note"></span>':''}
+        ${dist!=null?`<span class="odist">${fmtMiles(dist)}</span>`:''}
+      </button>`;
+    }
+
+/* ---------- Nearest first (VDA112) ----------
+   With the rep's location known (Follow, or one tap of "Use my location"), the
+   list runs by DISTANCE in bands — within ¼ mile, ¼–1, 1–3, 3–10, 10+ — instead
+   of by city, each office showing how far it is. It doesn't reshuffle while the
+   rep reads: the order is re-worked only after they've moved about a quarter
+   mile, or when they tap ↻ Update. "By city" switches back (remembered). */
+const NEAR_BANDS=[[0.25,'Within ¼ mile'],[1,'¼ – 1 mile'],[3,'1 – 3 miles'],[10,'3 – 10 miles'],[Infinity,'More than 10 miles']];
+let _nearAnchor=null, _nearAt=0, _nearLimit=150;
+function listSortMode(){ try{ return localStorage.getItem('sl.listSort')||'near'; }catch(e){ return 'near'; } }
+function setListSortMode(m){ try{ localStorage.setItem('sl.listSort',m); }catch(e){} }
+function fmtMiles(d){ return d<0.1 ? Math.max(50,Math.round(d*5280/50)*50)+' ft' : (d<10 ? d.toFixed(1) : String(Math.round(d)))+' mi'; }
+function agoShort(t){ const m=Math.round((Date.now()-t)/60000); return m<1?'just now':m<60?m+' min ago':Math.round(m/60)+' h ago'; }
+function listBarHTML(mode){
+  const near=mode==='near';
+  const loc = userPos
+    ? (near ? `<span class="lb-note">From where you are · ${agoShort(_nearAt||Date.now())}</span><button type="button" class="lb-btn" data-lb="refresh">↻ Update</button>` : '')
+    : `<button type="button" class="lb-btn" data-lb="locate">📍 Use my location</button>${near?'<span class="lb-note">to list the nearest offices first</span>':''}`;
+  return `<div class="listbar"><div class="lb-seg" role="group" aria-label="Order the list"><button type="button" class="${near?'on':''}" data-lb="near" aria-pressed="${near}">Nearest first</button><button type="button" class="${!near?'on':''}" data-lb="city" aria-pressed="${!near}">By city</button></div>${loc}</div>`;
+}
+function renderNearList(filtered, main){
+  if(!userPos) return false;                      // no location yet → the city list, with the bar offering it
+  if(!_nearAnchor || haversine(_nearAnchor.lat,_nearAnchor.lng,userPos.lat,userPos.lng)>0.25){ _nearAnchor={lat:userPos.lat,lng:userPos.lng}; _nearAt=Date.now(); }
+  const withPos=[], noPos=[];
+  filtered.forEach(o=>{ const la=+o.lat, ln=+o.lng; if(isFinite(la)&&isFinite(ln)&&(la||ln)) withPos.push([o,haversine(_nearAnchor.lat,_nearAnchor.lng,la,ln)]); else noPos.push(o); });
+  // a building is ONE stop: its suites take the nearest suite's distance, then run in suite order
+  const bldKey=o=>{ const k=sbBldKey(o); return k ? k+'|'+String(o.city||'').toLowerCase() : ''; }, bd=new Map();
+  withPos.forEach(([o,d])=>{ const k=bldKey(o); if(k) bd.set(k, Math.min(bd.has(k)?bd.get(k):Infinity, d)); });
+  const stop=x=>{ const k=bldKey(x[0]); return k ? bd.get(k) : x[1]; };
+  withPos.sort((a,b)=>(stop(a)-stop(b))||sbAddrCmp(a[0],b[0]));
+  const bandOf=d=>NEAR_BANDS.findIndex(b=>d<=b[0]), counts=NEAR_BANDS.map(()=>0); withPos.forEach(x=>counts[bandOf(x[1])]++);
+  const shown=withPos.slice(0,_nearLimit);
+  let html=listBarHTML('near'), band=-1, prevBld=null;
+  shown.forEach(([o,d])=>{
+    const bi=bandOf(d);
+    if(bi!==band){ if(band>=0) html+='</div>'; band=bi; prevBld=null;
+      html+=`<div class="nearband"><div class="nearhdr"><span class="cityname">${NEAR_BANDS[bi][1]}</span><span class="citycount">${counts[bi]}</span></div>`; }
+    // same building as the row above (its suites are kept together, in suite order)
+    const k=sbBldKey(o); html+=officeRowHTML(o, !!k&&k===prevBld, d); prevBld=k;
+  });
+  if(band>=0) html+='</div>';
+  if(withPos.length>shown.length) html+=`<button type="button" class="lb-more" data-lb="more">Show ${Math.min(150,withPos.length-shown.length)} more · ${withPos.length-shown.length} farther away</button>`;
+  if(noPos.length) html+=`<div class="nearband"><div class="nearhdr"><span class="cityname">No map position</span><span class="citycount">${noPos.length}</span></div>${noPos.slice(0,50).map(o=>officeRowHTML(o)).join('')}</div>`;
+  main.innerHTML=html;
+  return true;
+}
+document.addEventListener('click', e=>{
+  const b=e.target.closest&&e.target.closest('[data-lb]'); if(!b) return;
+  const a=b.getAttribute('data-lb');
+  if(a==='near'||a==='city'){ setListSortMode(a); _nearLimit=150; render(); }
+  else if(a==='refresh'){ _nearAnchor=null; render(); }
+  else if(a==='more'){ _nearLimit+=150; render(); }
+  else if(a==='locate'){
+    if(!navigator.geolocation){ toast("Location not supported on this device"); return; }
+    if(window.isSecureContext===false){ toast("Open the https:// site to use location"); return; }
+    b.disabled=true; b.textContent='Finding you…';
+    navigator.geolocation.getCurrentPosition(pos=>{
+      userPos={lat:pos.coords.latitude,lng:pos.coords.longitude,acc:pos.coords.accuracy};
+      try{ detectGeoState(userPos.lat,userPos.lng); }catch(_){}
+      _nearAnchor=null; setListSortMode('near'); render();
+    }, ()=>{ b.disabled=false; b.textContent='📍 Use my location'; toast("Location blocked — allow it in Settings ▸ Safari"); }, {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
+  }
+});
 
 /* ---------- Addresses, in the order a rep walks them (VDA111) ---------- */
 const SB_ABBR={north:'n',south:'s',east:'e',west:'w',road:'rd',street:'st',avenue:'ave',av:'ave',boulevard:'blvd',drive:'dr',lane:'ln',
@@ -3969,7 +4051,7 @@ function openDetail(id){
     ${doctorsCardHTML(o)}
     ${pinNoteHTML(o)}
     <div class="dgrid">
-      <div class="dcard full"><div class="dl">Address</div><a class="dv" href="${mapAppleLink(o)}" target="_blank" rel="noopener">${esc(o.addr)}, ${esc(o.city)}, IL ${esc(o.zip)}</a></div>
+      <div class="dcard full"><div class="dl">Address</div><a class="dv" href="${mapAppleLink(o)}" target="_blank" rel="noopener">${esc(o.addr)}, ${esc(o.city)}, ${esc(stateAbbr2(o.state)||String(o.state||'').trim())} ${esc(o.zip)}</a></div>
       <div class="dcard"><div class="dl">Phone</div>${o.phone?`<a class="dv" href="tel:${esc(o.phone)}">${esc(o.phone)}</a>`:'<div class="dv" style="color:var(--ink-faint)">—</div>'}</div>
       <div class="dcard"><div class="dl">Email</div>${o.email?`<a class="dv" href="mailto:${esc(o.email)}">${esc(o.email)}</a>`:'<div class="dv" style="color:var(--ink-faint)">—</div>'}</div>
       <div class="dcard"><div class="dl">Scanner</div><div class="dv" style="${scOn?'color:var(--teal)':''}">${esc(o.scanner)||'—'}</div></div>
