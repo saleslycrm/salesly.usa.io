@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA112 v112</title>
+<title>Salesly VDA113 v113</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -488,6 +488,7 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 .labseg .ld{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none;}
 .labseg b{font-weight:800;font-variant-numeric:tabular-nums;}
 .labseg.on{border-color:#0f3d36;background:rgba(18,165,160,.12);}
+.deeplink-hl{outline:3px solid #1aa6b7;outline-offset:4px;border-radius:10px;transition:outline-color .6s}
 </style>
 </head>
 <body>
@@ -1427,6 +1428,7 @@ function _showLogin_unused(msg){
       await cloudPull(); cloudSubscribe(); cloudLoadReps();
       rebuild(); render(); setSyncBadge();
       toast("Signed in");
+      setTimeout(deepLinkRun, 600);   // VDA113: a dashboard link waiting on sign-in
     }catch(err){
       go.disabled=false; go.textContent="Sign in";
       document.getElementById('li_err').textContent=err.message||"Sign-in failed";
@@ -4747,6 +4749,7 @@ function openSync(){
     _loginLock=false;
     rebuild(); render(); setSyncBadge(); hideSheet();
     toast(pulled?("Signed in — "+DB.length.toLocaleString()+" offices loaded"):("⚠️ "+(lastSyncErr||"connected, but no data came back")));
+    setTimeout(deepLinkRun, 600);   // VDA113: a dashboard link waiting on sign-in
   };
   const restoreBtn=document.getElementById('sy_restore');
   if(restoreBtn) restoreBtn.onclick=async()=>{
@@ -5130,7 +5133,47 @@ function wire(){
 try{ if(localStorage.getItem('hdr_collapsed')!=='0') document.body.classList.add('hdr-collapsed'); }catch(e){ document.body.classList.add('hdr-collapsed'); }
 // Expose popup-invoked handlers globally as a safety net.
 window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openForm;
+/* ── VDA113: LINKS FROM THE LAB DASHBOARD ─────────────────────────────────────
+   "…?office=<id>&do=visit" opens that office's form at Visit history, ready to
+   log. The link is noted at start-up and cleared from the address bar (so a
+   refresh doesn't reopen it), kept through sign-in, and acted on once the
+   offices are loaded. An office that isn't loaded (a prospect far from the map
+   view) is fetched on its own. Links older than 30 minutes are ignored. */
+const DEEP_KEY="salesly_deeplink";
+function deepLinkCapture(){
+  try{
+    const q=new URLSearchParams(location.search), id=q.get("office");
+    if(!id) return;
+    sessionStorage.setItem(DEEP_KEY, JSON.stringify({id:id, act:q.get("do")||"visit", t:Date.now()}));
+    history.replaceState(null, "", location.pathname+location.hash);
+  }catch(e){}
+}
+async function deepLinkRun(){
+  let link=null; try{ link=JSON.parse(sessionStorage.getItem(DEEP_KEY)||"null"); }catch(e){}
+  if(!link||!link.id) return;
+  if(Date.now()-(link.t||0)>30*60*1000){ try{ sessionStorage.removeItem(DEEP_KEY); }catch(e){} return; }
+  if(!sbUser) return;                      // not signed in yet — runs again after sign-in
+  try{ sessionStorage.removeItem(DEEP_KEY); }catch(e){}
+  let o=officeById(link.id);
+  if(!o && cloudOn && sb){
+    try{
+      const {data}=await sb.from("offices").select("*").eq("id", link.id).maybeSingle();
+      if(data){ store.offices[data.id]=dbToApp(data); rebuild(); o=officeById(link.id); }
+    }catch(e){}
+  }
+  if(!o){ toast("That office isn't in Salesly"); return; }
+  openForm(o.id);
+  setTimeout(()=>{
+    const add=document.getElementById("f_visitadd"); if(!add) return;
+    const box=add.closest(".fld")||add; box.scrollIntoView({block:"center", behavior:"smooth"});
+    box.classList.add("deeplink-hl"); setTimeout(()=>box.classList.remove("deeplink-hl"), 2200);
+    const n=document.getElementById("f_vnote"); if(n){ try{ n.focus({preventScroll:true}); }catch(e){ n.focus(); } }
+  }, 350);
+  toast("Log your visit to "+o.name);
+}
+
 (async function init(){
+  deepLinkCapture();               // VDA113: a link from the dashboard, if any
   load();
   loadReps(); loadMe();           // rep registry + this device's identity
   // For non-admin reps, detect their current state from GPS once on load so the
@@ -5238,6 +5281,7 @@ window.openDetail=openDetail; window.quickNote=quickNote; window.openForm=openFo
   // location permission, so if the auto-start can't get a fix we leave you on the
   // map with the locate button ready (one tap then begins following).
   startOnMapFollowing();
+  setTimeout(deepLinkRun, 1400);   // VDA113: after the map has opened
 })();
 
 // Open the map and kick off follow mode. Safe to call repeatedly.
