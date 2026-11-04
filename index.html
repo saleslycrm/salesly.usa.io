@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA113 v113</title>
+<title>Salesly VDA114 v114</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -489,6 +489,10 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 .labseg b{font-weight:800;font-variant-numeric:tabular-nums;}
 .labseg.on{border-color:#0f3d36;background:rgba(18,165,160,.12);}
 .deeplink-hl{outline:3px solid #1aa6b7;outline-offset:4px;border-radius:10px;transition:outline-color .6s}
+.qm{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;font-size:11px;font-weight:900;line-height:1;vertical-align:2px;cursor:help}
+.qm-teal{background:#e0f5f6;color:#18818b}.qm-yellow{background:#fde68a;color:#92400e}.qm-orange{background:#fed7aa;color:#c2410c}.qm-red{background:#fecaca;color:#b91c1c}
+.quietbar{display:block;width:auto;height:auto;border-radius:10px;padding:8px 12px;margin:0 0 10px;font-size:13px;font-weight:600;cursor:default}
+.quietbar b{font-weight:900;margin-right:4px}
 </style>
 </head>
 <body>
@@ -2497,6 +2501,32 @@ function renderInner(){
   main.innerHTML=html;
 }
 
+/* ── VDA114: GONE QUIET ─────────────────────────────────────────────────────
+   A customer office's ! mark: business days (Mon–Fri) since the most recent case
+   among its doctors, read from the lab lines the dashboard writes ("… · last case
+   10/14/2026 · … · sends every ~2 business days"). 5–9 faint teal · 10–14 yellow ·
+   15–19 orange · 20+ red. The doctor's usual rhythm goes in the hover text. */
+function bizDaysAfter(a,b){ let n=0; const d=new Date(a.getFullYear(),a.getMonth(),a.getDate()), e=new Date(b.getFullYear(),b.getMonth(),b.getDate());
+  while(d<e){ d.setDate(d.getDate()+1); const w=d.getDay(); if(w!==0&&w!==6) n++; } return n; }
+function officeQuiet(o){
+  let last=null, usual=null;
+  String((o&&o.notes)||"").split("\n").forEach(l=>{
+    if(!/LAB:/i.test(l)) return;
+    const m=l.match(/last case (\d{1,2})\/(\d{1,2})\/(\d{4})/i);
+    if(m){ const d=new Date(+m[3],+m[1]-1,+m[2]); if(!last||d>last){ last=d; const u=l.match(/sends every ~(\d+) business day/i); usual=u?+u[1]:null; } }
+  });
+  if(!last) return null;
+  return { last, bd: bizDaysAfter(last,new Date()), usual };
+}
+function quietLevelSL(bd){ return bd>=20?"red":bd>=15?"orange":bd>=10?"yellow":bd>=5?"teal":null; }
+function quietTipSL(q){
+  const w=n=>n+" business day"+(n===1?"":"s");
+  return "No case in "+w(q.bd)+" — last case "+q.last.toLocaleDateString("en-US",{month:"short",day:"numeric"})+
+    (q.usual?" · usually sends every ~"+w(q.usual)+(q.bd>=2*q.usual?" ("+Math.round(q.bd/q.usual)+"× their usual gap)":""):"");
+}
+function quietMarkSL(o){ const q=officeQuiet(o), lv=q&&quietLevelSL(q.bd); if(!lv) return "";
+  const t=esc(quietTipSL(q)); return `<span class="qm qm-${lv}" title="${t}" role="img" aria-label="${t}">!</span>`; }
+
 /* One office row in the list — shared by the By-city and Nearest-first lists (VDA112).
    `same` = in the same building as the row above it; `dist` = miles from the rep. */
 function officeRowHTML(o,same,dist){
@@ -2505,7 +2535,7 @@ function officeRowHTML(o,same,dist){
         <div class="badges">
           <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
         </div>
-        <div class="onm"><div class="otitle">${esc(o.name)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
+        <div class="onm"><div class="otitle">${esc(o.name)} ${quietMarkSL(o)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
         ${isClosed(o)?'<span class="pill closedpill">★ Closed</span>':(isClaimed(o)?`<span class="pill claimpill">☆ ${claimedByMe(o)?'Mine':esc((o.claimedByName||'').split(' ')[0]||'Claimed')}</span>`:'')}${labChipCompact(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
         ${stripLab(o.notes)?'<span class="dot note"></span>':''}
         ${dist!=null?`<span class="odist">${fmtMiles(dist)}</span>`:''}
@@ -2958,7 +2988,7 @@ function popupHTML(o){
   const noteBlock = cleanNotes
     ? `<div class="popup-note"><div class="pnl">Notes</div>${esc(cleanNotes)}</div>`
     : '';
-  return `<div class="popup-nm">${esc(o.name)}</div>
+  return `<div class="popup-nm">${esc(o.name)} ${quietMarkSL(o)}</div>
     <a class="popup-ad" href="${mapAppleLink(o)}" target="_blank" rel="noopener" style="text-decoration:none;display:block;">${esc(o.addr)}, ${esc(o.city)}</a>
     ${dist}
     ${effStatus(o)?`<div style="margin:2px 0 4px;">${labChip(o)}</div>`:''}
@@ -4040,7 +4070,9 @@ function openDetail(id){
   document.getElementById('sheetTitle').textContent=o.name;
   const inactive=(o.active===false);
   const scOn=o.scanner&&o.scanner!=="";
+  const _q=officeQuiet(o), _ql=_q&&quietLevelSL(_q.bd);
   document.getElementById('sheetBody').innerHTML=`
+    ${_ql?`<div class="quietbar qm-${_ql}"><b>!</b> ${esc(quietTipSL(_q))}</div>`:''}
     <iframe class="detail-map" src="${mapEmbed(o)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
     <div class="maplinks">
       <a class="maplink" href="${mapGLink(o)}" target="_blank" rel="noopener">
