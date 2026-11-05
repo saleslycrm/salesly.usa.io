@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA114 v114</title>
+<title>Salesly VDA115 v115</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -493,6 +493,8 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 .qm-teal{background:#e0f5f6;color:#18818b}.qm-yellow{background:#fde68a;color:#92400e}.qm-orange{background:#fed7aa;color:#c2410c}.qm-red{background:#fecaca;color:#b91c1c}
 .quietbar{display:block;width:auto;height:auto;border-radius:10px;padding:8px 12px;margin:0 0 10px;font-size:13px;font-weight:600;cursor:default}
 .quietbar b{font-weight:900;margin-right:4px}
+.gm{margin-right:4px;font-size:13px;vertical-align:1px}
+.goldbar{border-radius:10px;padding:8px 12px;margin:0 0 8px;font-size:13px;font-weight:700;background:#fef3c7;color:#92400e}
 </style>
 </head>
 <body>
@@ -2518,6 +2520,10 @@ function officeQuiet(o){
   if(!last) return null;
   return { last, bd: bizDaysAfter(last,new Date()), usual };
 }
+/* VDA115: ⭐ GOLDEN LIST — the dashboard marks a Golden doctor's lab line
+   "· ⭐ Golden List"; any such line makes the office a Golden account. */
+const isGoldenOffice=o=>/LAB:[^\n]*Golden List/i.test(String((o&&o.notes)||""));
+const goldMarkSL=o=>isGoldenOffice(o)?'<span class="gm" title="Golden List">⭐</span>':'';
 function quietLevelSL(bd){ return bd>=20?"red":bd>=15?"orange":bd>=10?"yellow":bd>=5?"teal":null; }
 function quietTipSL(q){
   const w=n=>n+" business day"+(n===1?"":"s");
@@ -2535,7 +2541,7 @@ function officeRowHTML(o,same,dist){
         <div class="badges">
           <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
         </div>
-        <div class="onm"><div class="otitle">${esc(o.name)} ${quietMarkSL(o)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
+        <div class="onm"><div class="otitle">${goldMarkSL(o)}${esc(o.name)} ${quietMarkSL(o)}</div><div class="oaddr">${esc(o.addr)}${o.zip?' · '+esc(o.zip):''}</div></div>
         ${isClosed(o)?'<span class="pill closedpill">★ Closed</span>':(isClaimed(o)?`<span class="pill claimpill">☆ ${claimedByMe(o)?'Mine':esc((o.claimedByName||'').split(' ')[0]||'Claimed')}</span>`:'')}${labChipCompact(o)}${scOn?`<span class="pill sc">${esc(o.scanner)}</span>`:''}
         ${stripLab(o.notes)?'<span class="dot note"></span>':''}
         ${dist!=null?`<span class="odist">${fmtMiles(dist)}</span>`:''}
@@ -2988,7 +2994,7 @@ function popupHTML(o){
   const noteBlock = cleanNotes
     ? `<div class="popup-note"><div class="pnl">Notes</div>${esc(cleanNotes)}</div>`
     : '';
-  return `<div class="popup-nm">${esc(o.name)} ${quietMarkSL(o)}</div>
+  return `<div class="popup-nm">${goldMarkSL(o)}${esc(o.name)} ${quietMarkSL(o)}</div>
     <a class="popup-ad" href="${mapAppleLink(o)}" target="_blank" rel="noopener" style="text-decoration:none;display:block;">${esc(o.addr)}, ${esc(o.city)}</a>
     ${dist}
     ${effStatus(o)?`<div style="margin:2px 0 4px;">${labChip(o)}</div>`:''}
@@ -4072,6 +4078,7 @@ function openDetail(id){
   const scOn=o.scanner&&o.scanner!=="";
   const _q=officeQuiet(o), _ql=_q&&quietLevelSL(_q.bd);
   document.getElementById('sheetBody').innerHTML=`
+    ${isGoldenOffice(o)?'<div class="goldbar">⭐ Golden List account</div>':''}
     ${_ql?`<div class="quietbar qm-${_ql}"><b>!</b> ${esc(quietTipSL(_q))}</div>`:''}
     <iframe class="detail-map" src="${mapEmbed(o)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
     <div class="maplinks">
