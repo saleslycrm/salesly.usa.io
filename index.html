@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA115 v115</title>
+<title>Salesly VDA116 v116</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -495,6 +495,7 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 .quietbar b{font-weight:900;margin-right:4px}
 .gm{margin-right:4px;font-size:13px;vertical-align:1px}
 .goldbar{border-radius:10px;padding:8px 12px;margin:0 0 8px;font-size:13px;font-weight:700;background:#fef3c7;color:#92400e}
+.goldbar.sv{background:#f1f5f9;color:#334155}
 </style>
 </head>
 <body>
@@ -2523,7 +2524,9 @@ function officeQuiet(o){
 /* VDA115: ⭐ GOLDEN LIST — the dashboard marks a Golden doctor's lab line
    "· ⭐ Golden List"; any such line makes the office a Golden account. */
 const isGoldenOffice=o=>/LAB:[^\n]*Golden List/i.test(String((o&&o.notes)||""));
-const goldMarkSL=o=>isGoldenOffice(o)?'<span class="gm" title="Golden List">⭐</span>':'';
+// VDA116: 🥈 SILVER LIST — "· 🥈 Silver List" on a lab line (Golden wins if both)
+const isSilverOffice=o=>!isGoldenOffice(o)&&/LAB:[^\n]*Silver List/i.test(String((o&&o.notes)||""));
+const goldMarkSL=o=>isGoldenOffice(o)?'<span class="gm" title="Golden List">⭐</span>':isSilverOffice(o)?'<span class="gm" title="Silver List">🥈</span>':'';
 function quietLevelSL(bd){ return bd>=20?"red":bd>=15?"orange":bd>=10?"yellow":bd>=5?"teal":null; }
 function quietTipSL(q){
   const w=n=>n+" business day"+(n===1?"":"s");
@@ -4078,7 +4081,7 @@ function openDetail(id){
   const scOn=o.scanner&&o.scanner!=="";
   const _q=officeQuiet(o), _ql=_q&&quietLevelSL(_q.bd);
   document.getElementById('sheetBody').innerHTML=`
-    ${isGoldenOffice(o)?'<div class="goldbar">⭐ Golden List account</div>':''}
+    ${isGoldenOffice(o)?'<div class="goldbar">⭐ Golden List account</div>':isSilverOffice(o)?'<div class="goldbar sv">🥈 Silver List account</div>':''}
     ${_ql?`<div class="quietbar qm-${_ql}"><b>!</b> ${esc(quietTipSL(_q))}</div>`:''}
     <iframe class="detail-map" src="${mapEmbed(o)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
     <div class="maplinks">
