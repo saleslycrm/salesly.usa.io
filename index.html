@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA116 v116</title>
+<title>Salesly VDA117 v117</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -496,6 +496,13 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 .gm{margin-right:4px;font-size:13px;vertical-align:1px}
 .goldbar{border-radius:10px;padding:8px 12px;margin:0 0 8px;font-size:13px;font-weight:700;background:#fef3c7;color:#92400e}
 .goldbar.sv{background:#f1f5f9;color:#334155}
+.vnote-area{width:100%;min-height:64px;resize:vertical;font:inherit;line-height:1.45;padding:8px 10px;border-radius:10px;box-sizing:border-box}
+.fld-sub{display:block;font-weight:500;text-transform:none;letter-spacing:0;font-size:11.5px;color:var(--ink-soft);margin-top:2px}
+.visititem.vi-block{display:block}.vi-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.vi-note{white-space:pre-wrap;font-size:13.5px;line-height:1.45;margin:6px 0 2px 18px;padding:8px 10px;background:var(--teal-wash);border-radius:8px;color:var(--ink)}
+.vi-none{font-size:12px;color:var(--ink-soft);margin:4px 0 0 18px;font-style:italic}.vi-out{font-size:11.5px;color:var(--ink-soft);margin-left:6px}
+.vi-acts{display:flex;gap:6px}.visitedit{font-size:12px;border:none;background:none;color:var(--teal-deep);font-weight:700;cursor:pointer}
+.vi-edit{margin:6px 0 2px 18px}.vi-eacts{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}
 </style>
 </head>
 <body>
@@ -1964,6 +1971,11 @@ function lastVisit(o){return (o.visits&&o.visits.length)?o.visits[0].date:"";}
 // --- visit objects: {date:"YYYY-MM-DD", color:"green|yellow|red"|"", note:""} ---
 const VCOLORS={green:"#2f7d3f",yellow:"#bf9b16",red:"#b3402f",closed:"#d4a017"};
 const VLABEL={green:"Good",yellow:"Okay",red:"Poor",closed:"Closed"};
+/* VDA117: VISIT NOTES keep commas, ~, | and line breaks. The stored format uses
+   those as separators, so a note's own are encoded (%2C %7E %7C %0A, and % as
+   %25); notes written before VDA117 have none of these and read unchanged. */
+const VNOTE_ENC=s=>String(s||"").replace(/%/g,"%25").replace(/~/g,"%7E").replace(/\|/g,"%7C").replace(/,/g,"%2C").replace(/\r?\n/g,"%0A").trim();
+const VNOTE_DEC=s=>String(s||"").replace(/%(25|7E|7C|2C|0A)/gi,(m,h)=>({"25":"%","7E":"~","7C":"|","2C":",","0A":"\n"})[h.toUpperCase()]);
 function parseVisits(v){
   let arr=[];
   if(v==null) arr=[];
@@ -1977,7 +1989,7 @@ function parseVisits(v){
     // the uid is what attribution and closed-sale credit actually key on.
     const parts=String(item).split("~");
     const d=normDate(parts[0]); if(!d)return null;
-    return {date:d, color:(parts[1]||"").trim(), note:(parts[2]||"").trim(), rep:(parts[3]||"").trim(), uid:(parts[4]||"").trim()};
+    return {date:d, color:(parts[1]||"").trim(), note:VNOTE_DEC((parts[2]||"").trim()), rep:(parts[3]||"").trim(), uid:(parts[4]||"").trim()};
   }).filter(Boolean);
   // newest first by date
   out.sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
@@ -1990,7 +2002,7 @@ function visitsToString(visits){
     // so strip them from free-text fields to avoid splitting a visit into pieces
     // (a comma in "call, then email" would otherwise truncate the note on read).
     const clean=s=>(s||"").replace(/[~|,]/g," ").replace(/\s+/g," ").trim();
-    const c=v.color||""; const n=clean(v.note); const r=clean(v.rep); const u=clean(v.uid);
+    const c=v.color||""; const n=VNOTE_ENC(v.note); const r=clean(v.rep); const u=clean(v.uid);   // notes: encoded, not stripped
     if(!c&&!n&&!r&&!u)return v.date;
     // Emit only as many ~fields as are needed, so older readers still cope.
     if(u) return v.date+"~"+c+"~"+n+"~"+r+"~"+u;
@@ -3005,7 +3017,7 @@ function popupHTML(o){
     ${claimBlockHTML(o,true)}
     ${scOn?`<span class="popup-sc">${esc(o.scanner)}</span>`:''}
     ${noteBlock}
-    <textarea class="popup-quick" id="pq_${o.id}" placeholder="Add a quick note…"></textarea>
+    <textarea class="popup-quick" id="pq_${o.id}" placeholder="Add a note to today’s visit…"></textarea>
     <button class="popup-btn add" data-pop-note="${o.id}" style="margin-bottom:6px;">Save note</button>
     <div class="popup-onbox">
       <label class="popup-onrow"><input type="checkbox" data-pop-kit="${o.id}" ${o.starterKit==='Yes'?'checked':''}> <span>Send Starter Kit</span></label>
@@ -4109,9 +4121,9 @@ function openDetail(id){
       <div class="dcard"><div class="dl">Added By</div><div class="dv">${o.addedBy?esc(o.addedBy):'<span style="color:var(--ink-faint)">—</span>'}</div></div>
       <div class="dcard"><div class="dl">Active</div><div class="dv" style="color:${inactive?'var(--danger)':'var(--green)'}">${inactive?'Inactive':'Active'}</div></div>
     </div>
-    ${(o.visits&&o.visits.length)?`<div class="dl" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:6px;">Recent Visits</div>
-    <div class="visitlist">${o.visits.slice(0,8).map(v=>{const dot=v.color?`<span class="vdot" style="background:${VCOLORS[v.color]||'#ccc'}"></span>`:'';const note=v.note?`<span class="vnotetag">${esc(v.note)}</span>`:'';const rep=v.rep?`<span class="vnotetag" style="background:var(--teal-wash);color:var(--teal-deep);">${esc(v.rep)}</span>`:'';return `<div class="visititem"><span class="vleft">${dot}${esc(fmtDate(v.date))}${note}${rep}</span></div>`;}).join('')}</div>`:''}
-    <div class="dl" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:6px;">Notes</div>
+    ${(o.visits&&o.visits.length)?`<div class="dl" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:6px;">Recent visits &amp; notes</div>
+    <div class="visitlist">${o.visits.slice(0,8).map(v=>{const dot=v.color?`<span class="vdot" style="background:${VCOLORS[v.color]||'#ccc'}"></span>`:'';const rep=v.rep?`<span class="vnotetag" style="background:var(--teal-wash);color:var(--teal-deep);">${esc(v.rep)}</span>`:'';const out=v.color?`<span class="vi-out">${esc(VLABEL[v.color]||'')}</span>`:'';return `<div class="visititem vi-block"><div class="vi-top"><span class="vleft">${dot}<b>${esc(fmtDate(v.date))}</b>${out}${rep}</span></div>${v.note?`<div class="vi-note">${esc(v.note)}</div>`:''}</div>`;}).join('')}</div>`:''}
+    <div class="dl" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:6px;">Office notes</div>
     <div class="notebox">${stripLab(o.notes)?esc(stripLab(o.notes)):'<span style="color:var(--ink-faint)">No notes yet.</span>'}</div>
     <div class="actions">
       <button class="btn btn-primary" data-edit="${o.id}">
@@ -4164,8 +4176,8 @@ function openForm(id, prefill){
     <div class="fld"><label>Doctor(s)</label><input id="f_drs" value="${esc(o.drs)}" placeholder="Dr. Jane Smith"></div>
     <div class="fld"><label>Office Hours</label><input id="f_hours" value="${esc(o.hours)}" placeholder="Mon–Fri 8–5"></div>
     <div class="fld"><label>Visit Day / Time</label><input id="f_visit" value="${esc(o.visitDay)}" placeholder="Tue 10am"></div>
-    <div class="fld"><label>Notes</label><textarea id="f_notes" placeholder="Add notes…">${esc(stripLab(o.notes))}</textarea><div class="dictate-hint">🎤 To talk instead of type, tap the field, then tap the microphone on your keyboard (next to the spacebar).</div></div>
-    <div class="fld"><label>Visit history</label>
+    <div class="fld"><label>Office notes <span class="fld-sub">background that doesn’t change from visit to visit — contacts, preferences. What happened on a visit goes in <b>Visit notes</b> below.</span></label><textarea id="f_notes" placeholder="e.g. Front desk: Christine · prefers Tuesday pickups">${esc(stripLab(o.notes))}</textarea><div class="dictate-hint">🎤 To talk instead of type, tap the field, then tap the microphone on your keyboard (next to the spacebar).</div></div>
+    <div class="fld"><label>Visits &amp; visit notes</label>
       <div class="visitbox">
         <div class="visitadd">
           <input type="date" id="f_visitdate" value="${todayStr()}">
@@ -4176,7 +4188,8 @@ function openForm(id, prefill){
           <button type="button" class="vcolorbtn" data-vc="yellow"><span class="vdot" style="background:${VCOLORS.yellow}"></span>Okay</button>
           <button type="button" class="vcolorbtn" data-vc="red"><span class="vdot" style="background:${VCOLORS.red}"></span>Poor</button>
         </div>
-        <input id="f_vnote" class="vnote" type="text" placeholder="Optional note (e.g. uses competitor, follow up)">
+        <textarea id="f_vnote" class="vnote vnote-area" rows="3" placeholder="Visit notes — who you met, what they said, next steps…"></textarea>
+        <div class="dictate-hint">🎤 To talk instead of type, tap the box, then tap the mic on your keyboard. Your name and the date are stamped on the visit.</div>
         <div id="f_visitlist" class="visitlist"></div>
       </div>
     </div>
@@ -4253,13 +4266,23 @@ function openForm(id, prefill){
     const box=document.getElementById('f_visitlist');
     if(!box) return;
     if(!visits.length){ box.innerHTML='<div class="visitempty">No visits logged yet.</div>'; return; }
+    // VDA117: each visit is its own entry — date, outcome, who, and its full note
     box.innerHTML=visits.map((v,i)=>{
       const dot=v.color?`<span class="vdot" style="background:${VCOLORS[v.color]||'#ccc'}" title="${VLABEL[v.color]||''}"></span>`:'';
-      const note=v.note?`<span class="vnotetag">${esc(v.note)}</span>`:'';
       const rep=v.rep?`<span class="vnotetag" style="background:var(--teal-wash);color:var(--teal-deep);">${esc(v.rep)}</span>`:'';
-      return `<div class="visititem"><span class="vleft">${dot}${esc(fmtDate(v.date))}${note}${rep}</span><button type="button" data-vi="${i}" class="visitdel">Remove</button></div>`;
+      const out=v.color?`<span class="vi-out">${esc(VLABEL[v.color]||'')}</span>`:'';
+      return `<div class="visititem vi-block"><div class="vi-top"><span class="vleft">${dot}<b>${esc(fmtDate(v.date))}</b>${out}${rep}</span>
+        <span class="vi-acts"><button type="button" data-ve="${i}" class="visitedit">✎ Note</button><button type="button" data-vi="${i}" class="visitdel">Remove</button></span></div>
+        ${v.note?`<div class="vi-note">${esc(v.note)}</div>`:'<div class="vi-none">No note for this visit</div>'}
+        <div class="vi-edit" id="vi_edit_${i}" hidden><textarea class="vnote vnote-area" rows="3">${esc(v.note||'')}</textarea>
+          <div class="vi-eacts"><button type="button" class="btn btn-ghost vi-cancel">Cancel</button><button type="button" class="btn vi-save">Save note</button></div></div></div>`;
     }).join('');
     box.querySelectorAll('[data-vi]').forEach(b=>{ b.onclick=()=>{ visits.splice(+b.getAttribute('data-vi'),1); renderVisits(); }; });
+    box.querySelectorAll('[data-ve]').forEach(b=>{ b.onclick=()=>{ const i=+b.getAttribute('data-ve'), ed=document.getElementById('vi_edit_'+i); if(!ed) return;
+      ed.hidden=false; const ta=ed.querySelector('textarea'); ta.focus();
+      ed.querySelector('.vi-cancel').onclick=()=>{ ed.hidden=true; };
+      ed.querySelector('.vi-save').onclick=()=>{ visits[i].note=ta.value.trim(); if(!visits[i].rep&&meName()){ visits[i].rep=meName(); visits[i].uid=visits[i].uid||myUid(); }
+        renderVisits(); toast("Note updated — tap Save to keep it"); }; }; });
   };
   renderVisits();
   const addBtn=document.getElementById('f_visitadd');
@@ -4364,19 +4387,19 @@ function quickNote(id){
   const txt=(ta?ta.value:'').trim();
   if(!txt){ toast("Type a note first"); return; }
   pushUndo("note "+o.name);
-  const stamp=new Date().toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
-  const line=`[${stamp}] ${txt}`;
-  const newNotes = o.notes ? (o.notes.trimEnd()+"\n"+line) : line;
-  // A quick-note from the field IS a visit — auto-log today (carry last color, max one/day).
-  const newVisits=ensureVisitToday(o.visits, lastColor(o));
-  upsertLocal(id, {notes:newNotes, visited:true, visits:newVisits});
+  // VDA117: a quick note from the field IS a visit note — it goes on today's visit
+  // (logged now if there isn't one), stamped with the rep, not into the office notes.
+  const newVisits=ensureVisitToday(o.visits, lastColor(o)).map(v=>Object.assign({},v));
+  const t=newVisits.find(v=>normDate(v.date)===todayStr());
+  if(t){ t.note=t.note?(t.note+"\n"+txt):txt; if(!t.rep&&meName()){ t.rep=meName(); t.uid=t.uid||myUid(); } }
+  upsertLocal(id, {visited:true, visits:newVisits});
   save(true); rebuild(); render();
   routeCheckoff(id);
   // re-open this marker's popup with the freshly saved note
   if(clusterLayer){
     clusterLayer.eachLayer(m=>{ if(m._oid===id){ try{ clusterLayer.zoomToShowLayer(m,()=>m.openPopup()); }catch(e){ m.openPopup(); } } });
   }
-  toast("Note saved",true);
+  toast("Note added to today’s visit",true);
 }
 
 /* ---------- export / email ---------- */
