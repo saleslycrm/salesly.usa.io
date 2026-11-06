@@ -16,7 +16,7 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA117 v117</title>
+<title>Salesly VDA118 v118</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -503,6 +503,13 @@ body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 .vi-none{font-size:12px;color:var(--ink-soft);margin:4px 0 0 18px;font-style:italic}.vi-out{font-size:11.5px;color:var(--ink-soft);margin-left:6px}
 .vi-acts{display:flex;gap:6px}.visitedit{font-size:12px;border:none;background:none;color:var(--teal-deep);font-weight:700;cursor:pointer}
 .vi-edit{margin:6px 0 2px 18px}.vi-eacts{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}
+.offercard{border:1px solid var(--teal-wash);background:linear-gradient(180deg,#f0fbfb,#fff);border-radius:12px;padding:10px 12px;margin:10px 0 14px}
+.offerhd{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--teal-deep);margin-bottom:6px}
+.offeritem{padding:7px 0;border-top:1px solid var(--teal-wash)}.offeritem:first-of-type{border-top:none}
+.offertop{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--ink)}.offerval{margin-left:auto;font-weight:800;color:var(--ink)}
+.offerconf{font-size:10.5px;font-weight:800;border-radius:6px;padding:1px 7px}.offerconf.c-High{background:#dcfce7;color:#166534}.offerconf.c-Medium{background:#fef3c7;color:#92400e}.offerconf.c-Low{background:#f1f5f9;color:#64748b}
+.offerdoc{font-size:12.5px;color:var(--ink-soft);margin-top:2px;line-height:1.4}.offersay{font-size:13px;font-style:italic;color:var(--ink);margin-top:4px;line-height:1.4}
+.popup-offer{font-size:12px;background:#f0fbfb;border-radius:6px;padding:4px 8px;margin:4px 0;color:var(--ink)}
 </style>
 </head>
 <body>
@@ -1927,7 +1934,20 @@ function resetPin(id){
   save(true); rebuild(); render(); openDetail(id);
   toast("📍 Pin reset");
 }
-function stripLab(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>!/LAB:\s*[A-Za-z]/i.test(l)).join("\n").replace(/^\n+|\n+$/g,""); }
+function stripLab(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>!/(?:LAB|OFFER):\s*[A-Za-z]/i.test(l)).join("\n").replace(/^\n+|\n+$/g,""); }
+// VDA118: the lines the dashboard writes (📊 LAB status, 💡 OFFER cross-sell) — kept whenever a rep saves
+function sysLines(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>/(?:LAB|OFFER):\s*[A-Za-z]/i.test(l)).join("\n"); }
+// 💡 OFFER: product · Dr. name · why · ≈$X/yr · confidence · what to say
+function officeOffers(o){
+  return String((o&&o.notes)||"").split("\n").map(l=>l.trim()).filter(l=>l.indexOf("💡 OFFER:")===0).map(l=>{
+    const p=l.replace(/^💡 OFFER:\s*/,"").split(" · "); return {cat:p[0]||"",doc:p[1]||"",why:p[2]||"",value:p[3]||"",conf:p[4]||"",say:p.slice(5).join(" · ")}; });
+}
+function offersCardHTML(o){
+  const offs=officeOffers(o); if(!offs.length) return "";
+  return `<div class="offercard"><div class="offerhd">💡 What to offer</div>${offs.map(x=>`<div class="offeritem">
+    <div class="offertop"><b>${esc(x.cat)}</b><span class="offerconf c-${esc(x.conf)}">${esc(x.conf)}</span><span class="offerval">${esc(x.value)}</span></div>
+    <div class="offerdoc">${esc(x.doc)} · ${esc(x.why)}</div>${x.say?`<div class="offersay">“${esc(x.say)}”</div>`:""}</div>`).join("")}</div>`;
+}
 function labLines(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>/LAB:\s*[A-Za-z]/i.test(l)).join("\n"); }
 // Imported rows (bridge clients now; future bulk prospect dumps use ids starting
 // with "b") — recognized so imports are never mistaken for rep activity.
@@ -3016,6 +3036,7 @@ function popupHTML(o){
     ${revenueLineHTML(o)}
     ${claimBlockHTML(o,true)}
     ${scOn?`<span class="popup-sc">${esc(o.scanner)}</span>`:''}
+    ${(()=>{ const f=officeOffers(o)[0]; return f?`<div class="popup-offer">💡 Offer <b>${esc(f.cat)}</b> · ${esc(f.doc)}${officeOffers(o).length>1?` <span style="opacity:.7">+${officeOffers(o).length-1} more</span>`:''}</div>`:''; })()}
     ${noteBlock}
     <textarea class="popup-quick" id="pq_${o.id}" placeholder="Add a note to today’s visit…"></textarea>
     <button class="popup-btn add" data-pop-note="${o.id}" style="margin-bottom:6px;">Save note</button>
@@ -4105,6 +4126,7 @@ function openDetail(id){
     ${effStatus(o)?`<div style="margin:10px 2px 2px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;">${labChip(o)}<span style="font-size:11px;color:#5c7370;flex:1 1 100%;">Lab pipeline status — per doctor, updated by the daily import</span></div>`:''}
     ${claimBlockHTML(o,false)}
     ${doctorsCardHTML(o)}
+    ${offersCardHTML(o)}
     ${pinNoteHTML(o)}
     <div class="dgrid">
       <div class="dcard full"><div class="dl">Address</div><a class="dv" href="${mapAppleLink(o)}" target="_blank" rel="noopener">${esc(o.addr)}, ${esc(o.city)}, ${esc(stateAbbr2(o.state)||String(o.state||'').trim())} ${esc(o.zip)}</a></div>
@@ -4328,7 +4350,7 @@ function saveForm(id,getScan,getVisits,getActive){
     lat:parseFloat(g('f_lat'))||"",lng:parseFloat(g('f_lng'))||"",
     phone:g('f_phone'),email:g('f_email'),scanner:getScan(),lab:g('f_lab'),
     drs:g('f_drs'),hours:g('f_hours'),visitDay:g('f_visit'),
-    notes:(function(){ const prev=id?(officeById(id)||{}).notes:""; const keep=labLines(prev); const typed=g('f_notes');
+    notes:(function(){ const prev=id?(officeById(id)||{}).notes:""; const keep=sysLines(prev); const typed=g('f_notes');
       return keep?(typed?keep+"\n"+typed:keep):typed; })(),
     visits,
     starterKit:(document.getElementById('f_starterkit')&&document.getElementById('f_starterkit').checked)?'Yes':'',
