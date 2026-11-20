@@ -16,16 +16,18 @@
      (VDA85 v85, VDA86 v86, …): the "VDA" token is what the header displays;
      the "v" token is what older builds' auto-updaters parse, so phones still
      running an old build can always find their way to the newest one. -->
-<title>Salesly VDA118 v118</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.jsdelivr.net https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://maps.geoapify.com; connect-src 'self' https://hfzizrzqrneuciykpuez.supabase.co wss://hfzizrzqrneuciykpuez.supabase.co https://nominatim.openstreetmap.org https://api.geocod.io https://api.geoapify.com https://api.openrouteservice.org; frame-src https://www.google.com https://maps.google.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Salesly VDA120 v120</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" integrity="sha384-pmjIAcz2bAn0xukfxADbZIb3t8oRT9Sv0rvO+BR5Csr6Dhqq+nZs59P0pPKQJkEV" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" integrity="sha384-wgw+aLYNQ7dlhK47ZPK7FRACiq7ROZwgFNg0m04avm4CaXS+Z9Y7nMu8yNjBKYC+" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" integrity="sha384-eXVCORTRlv4FUUgS/xmOyr66XBVraen8ATNLMESp92FKXLAMiKkerixTiBvXriZr" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js" integrity="sha384-uteMfOloLDGt042uDz+xHGF3ym63/WQ6rFq7murQRG8Ih7QrXGEGNtWd8688sb4O" crossorigin="anonymous"></script>
 <style>
 :root{
   --paper:#f4f1ea; --surface:#ffffff; --surface-2:#faf8f3;
@@ -409,6 +411,25 @@ body.sheet-open #mapview{z-index:0;}
 .cal-dd-empty,.cal-empty{text-align:center;color:var(--ink-soft);padding:24px 16px;}
 .cal-empty h3{color:var(--ink);margin:0 0 6px;}
 .cal-setme{margin-top:12px;background:var(--teal);color:#fff;border-radius:12px;padding:10px 18px;font-weight:700;}
+/* VDA119: "My week" progress card on the Calendar */
+.prog{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 12px 10px;margin:4px 0 12px;box-shadow:var(--shadow);}
+.prog-hd{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:9px;}
+.prog-hd b{font-size:14px;color:var(--ink);}
+.prog-hd span{font-family:var(--mono);font-size:11px;color:var(--ink-soft);text-align:right;}
+.prog-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;}
+.prog-t{background:var(--paper);border-radius:10px;padding:7px 8px;min-width:0;}
+.prog-v{font-size:21px;font-weight:800;color:var(--ink);line-height:1.1;}
+.prog-l{font-size:11px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.prog-c{display:inline-block;margin-top:4px;font-size:10.5px;font-weight:700;border-radius:7px;padding:2px 6px;white-space:nowrap;}
+.prog-c.up{background:#dcfce7;color:#047857;}.prog-c.dn{background:#fef3c7;color:#b45309;}.prog-c.on{background:var(--teal-wash);color:var(--teal-deep);}.prog-c.mut{background:#eef1f0;color:var(--ink-soft);font-weight:600;}
+.prog-bars{position:relative;display:flex;align-items:flex-end;gap:4px;height:38px;margin:11px 2px 3px;}
+.prog-bars i{flex:1;display:flex;flex-direction:column-reverse;border-radius:3px 3px 0 0;overflow:hidden;min-height:2px;}
+.prog-bars i b{display:block;}
+.prog-bars .usual{position:absolute;left:0;right:0;border-top:1.5px dashed #94a3b8;}
+.prog-ax{display:flex;gap:4px;margin:0 2px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);}
+.prog-ax span{flex:1;text-align:center;white-space:nowrap;overflow:hidden;}
+.prog-ft{font-size:11px;color:var(--ink-soft);margin-top:7px;line-height:1.4;}
+.prog-load{font-size:12.5px;color:var(--ink-soft);padding:6px 0;}
 body.sheet-open #mapview .leaflet-container{pointer-events:none;}
 #map{flex:1;width:100%;height:100%;background:var(--surface-2);-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
 #map .leaflet-tile-container,#map .leaflet-tile,#map .leaflet-container{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
@@ -1467,7 +1488,7 @@ async function cloudLoadReps(){
     // silently fell back to guessing the rep's state from GPS.
     const {data,error}=await sb.from("reps").select("id,name,email,role,active,territory").eq("active",true);
     if(error||!data||!data.length) return;
-    REPS=data.map(r=>({id:r.id,name:r.name,email:r.email||"",role:r.role||"rep",territory:r.territory||""}));
+    REPS=data.filter(r=>r.role!=="production").map(r=>({id:r.id,name:r.name,email:r.email||"",role:r.role||"rep",territory:r.territory||""}));   // VDA120: production-only logins aren't Salesly reps
     // keep ME pointed at the refreshed record so territory takes effect now
     try{ if(ME){ const mine=REPS.find(x=>String(x.id)===String(ME.id)); if(mine) ME=mine; } }catch(e){}
     saveReps();
@@ -1805,7 +1826,7 @@ function doctorsCardHTML(o){
       <div style="flex:1;min-width:0;">
         <div style="font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.dr?esc('Dr. '+d.dr):'This practice'}</div>
         <div style="font-size:11.5px;color:#5c7370;margin-top:2px;">
-          ${d.st?`<span class="labchip lab-${d.st}" style="font-size:10px;padding:1px 6px;">${LAB_LABEL[d.st]||d.st}</span> `:''}
+          ${d.st?`<span class="labchip lab-${String(d.st).replace(/[^a-z]/gi,'')}" style="font-size:10px;padding:1px 6px;">${esc(LAB_LABEL[d.st]||d.st)}</span> `:''}
           ${d.cases!=null?`${d.cases.toLocaleString()} case${d.cases===1?'':'s'}`:''}${d.last?` · last ${esc(d.last)}`:''}</div>
         ${(d.remakePct!=null||d.avgTat!=null)?`<div style="font-size:11.5px;color:#5c7370;margin-top:2px;">
           ${d.remakePct!=null?`<b style="color:var(--ink,#0f2a28);">${d.remakePct}%</b> remakes`:''}${(d.remakePct!=null&&d.avgTat!=null)?' · ':''}${d.avgTat!=null?`<b style="color:var(--ink,#0f2a28);">${d.avgTat}d</b> avg turnaround`:''}</div>`:''}
@@ -1853,7 +1874,7 @@ function labChipCompact(o){
   if(f){ const only=set.filter(st=>f.indexOf(st)>=0); if(only.length) set=only; }
   if(!set.length) return "";
   const shown=set.slice(0,2);
-  let html=shown.map(st=>`<span class="labchip lab-${st}">${LAB_LABEL[st]||st}</span>`).join('');
+  let html=shown.map(st=>`<span class="labchip lab-${String(st).replace(/[^a-z]/gi,'')}">${esc(LAB_LABEL[st]||st)}</span>`).join('');
   if(set.length>2) html+=`<span class="labchip" style="background:var(--line-strong);color:var(--ink);">+${set.length-2}</span>`;
   return html;
 }
@@ -1863,10 +1884,10 @@ function labChip(o){
   if(f){ const only=ds.filter(x=>f.indexOf(x.st)>=0); if(only.length) ds=only; }
   if(ds.length>1){
     // Mixed practice: one chip per doctor so you can see exactly who is what.
-    return ds.map(x=>`<span class="labchip lab-${x.st}">${LAB_LABEL[x.st]}${x.dr?` \u00B7 ${esc(x.dr)}`:''}</span>`).join(' ');
+    return ds.map(x=>`<span class="labchip lab-${String(x.st).replace(/[^a-z]/gi,'')}">${esc(LAB_LABEL[x.st]||x.st)}${x.dr?` \u00B7 ${esc(x.dr)}`:''}</span>`).join(' ');
   }
   const st=(ds[0]&&ds[0].st)||labStatus(o)||effStatus(o);
-  return st?`<span class="labchip lab-${st}">${LAB_LABEL[st]||st}</span>`:"";
+  return st?`<span class="labchip lab-${String(st).replace(/[^a-z]/gi,'')}">${esc(LAB_LABEL[st]||st)}</span>`:"";
 }
 // Notes are shown/edited WITHOUT the machine-written 📊 LAB line; the line stays
 // in the stored value (it powers the tag + filters and the bridge maintains it).
@@ -1883,7 +1904,7 @@ function pinNoteHTML(o){
   const when=o.pinMovedAt?fmtDate(String(o.pinMovedAt).slice(0,10)):'';
   return `<div style="margin:6px 2px;padding:8px 10px;border-radius:10px;background:#f1f7f6;font-size:12px;color:#2f4f4c;display:flex;align-items:center;gap:8px;">
     <span style="flex:1;">📍 Pin placed by hand${o.pinMovedBy?` by <b>${esc(o.pinMovedBy)}</b>`:''}${when?` on ${esc(when)}`:''}</span>
-    <button type="button" class="cb-btn" data-resetpin="${o.id}">Reset</button></div>`;
+    <button type="button" class="cb-btn" data-resetpin="${esc(o.id)}">Reset</button></div>`;
 }
 function startPinMove(id){
   const o=officeById(id); if(!o) return;
@@ -2083,16 +2104,16 @@ function claimBlockHTML(o, compact){
   if(isClosed(o)){
     return `<div class="claimbox closed"><span class="cb-star">★</span><div class="cb-txt"><b>Closed sale</b> — ${who}
       <span class="cb-sub">${o.closedVia==='visit'?'Visited':'Claimed'} ${d(o.claimedAt)} · closed ${d(o.closedAt)}${o.closedStatus?` (${esc(o.closedStatus)})`:''}</span></div>
-      ${(!compact&&isAdmin())?`<button type="button" class="cb-btn ghost" data-release="${o.id}">Clear</button>`:''}</div>`;
+      ${(!compact&&isAdmin())?`<button type="button" class="cb-btn ghost" data-release="${esc(o.id)}">Clear</button>`:''}</div>`;
   }
   if(isClaimed(o)){
     const mine=claimedByMe(o);
     return `<div class="claimbox claimed"><span class="cb-star hollow">☆</span><div class="cb-txt"><b>${mine?'Your account':'Claimed by '+who}</b>
       <span class="cb-sub">Since ${d(o.claimedAt)} · closes automatically on first order</span></div>
-      ${(!compact&&(mine||isAdmin()))?`<button type="button" class="cb-btn ghost" data-release="${o.id}">Release</button>`:''}</div>`;
+      ${(!compact&&(mine||isAdmin()))?`<button type="button" class="cb-btn ghost" data-release="${esc(o.id)}">Release</button>`:''}</div>`;
   }
   if(isBuyingStatus(o)) return "";            // already a customer — nothing to claim
-  return `<button type="button" class="cb-claim" data-claim="${o.id}"><span>☆</span> Mark as my account</button>`;
+  return `<button type="button" class="cb-claim" data-claim="${esc(o.id)}"><span>☆</span> Mark as my account</button>`;
 }
 function applyClaim(id, row){
   const loc=store.offices[id]; if(!loc) return;
@@ -2136,7 +2157,8 @@ function ensureVisitToday(visits, prevColor){
   visits.sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
   return visits;
 }
-function esc(s){return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+// VDA120 (security): quotes of both kinds and backticks too, so a value can never break out of an HTML attribute
+function esc(s){return (s==null?"":String(s)).replace(/[&<>"'`]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;","`":"&#96;"}[c]));}
 function toast(msg,undo){const t=document.getElementById('toast');t.innerHTML=esc(msg)+(undo?' <span class="undo" id="undoLink">Undo</span>':'');t.classList.add('show');if(undo){document.getElementById('undoLink').onclick=()=>{doUndo();t.classList.remove('show');};}clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),undo?5000:1800);}
 
 /* ---------- filtering ---------- */
@@ -2572,7 +2594,7 @@ function quietMarkSL(o){ const q=officeQuiet(o), lv=q&&quietLevelSL(q.bd); if(!l
    `same` = in the same building as the row above it; `dist` = miles from the rep. */
 function officeRowHTML(o,same,dist){
       const scOn=o.scanner&&o.scanner!=="None"&&o.scanner!=="";
-      return `<button class="office${same===true?' samebld':''}" data-open="${o.id}"${same===true?' title="Same building as the office above"':''}>
+      return `<button class="office${same===true?' samebld':''}" data-open="${esc(o.id)}"${same===true?' title="Same building as the office above"':''}>
         <div class="badges">
           <span class="dot ${isVisited(o)?'visited':''}" style="${isVisited(o)?'':'background:var(--line-strong)'}"></span>
         </div>
@@ -3038,15 +3060,15 @@ function popupHTML(o){
     ${scOn?`<span class="popup-sc">${esc(o.scanner)}</span>`:''}
     ${(()=>{ const f=officeOffers(o)[0]; return f?`<div class="popup-offer">💡 Offer <b>${esc(f.cat)}</b> · ${esc(f.doc)}${officeOffers(o).length>1?` <span style="opacity:.7">+${officeOffers(o).length-1} more</span>`:''}</div>`:''; })()}
     ${noteBlock}
-    <textarea class="popup-quick" id="pq_${o.id}" placeholder="Add a note to today’s visit…"></textarea>
-    <button class="popup-btn add" data-pop-note="${o.id}" style="margin-bottom:6px;">Save note</button>
+    <textarea class="popup-quick" id="pq_${esc(o.id)}" placeholder="Add a note to today’s visit… (no patient names or health details)"></textarea>
+    <button class="popup-btn add" data-pop-note="${esc(o.id)}" style="margin-bottom:6px;">Save note</button>
     <div class="popup-onbox">
-      <label class="popup-onrow"><input type="checkbox" data-pop-kit="${o.id}" ${o.starterKit==='Yes'?'checked':''}> <span>Send Starter Kit</span></label>
-      <label class="popup-onrow"><input type="checkbox" data-pop-welcome="${o.id}" ${o.welcomeEmail==='Yes'?'checked':''}> <span>Send Welcome Email</span></label>
+      <label class="popup-onrow"><input type="checkbox" data-pop-kit="${esc(o.id)}" ${o.starterKit==='Yes'?'checked':''}> <span>Send Starter Kit</span></label>
+      <label class="popup-onrow"><input type="checkbox" data-pop-welcome="${esc(o.id)}" ${o.welcomeEmail==='Yes'?'checked':''}> <span>Send Welcome Email</span></label>
     </div>
     <div class="popup-row">
-      <button class="popup-btn ghost" data-pop-view="${o.id}">View</button>
-      <button class="popup-btn ghost" data-pop-edit="${o.id}">Edit</button>
+      <button class="popup-btn ghost" data-pop-view="${esc(o.id)}">View</button>
+      <button class="popup-btn ghost" data-pop-edit="${esc(o.id)}">Edit</button>
     </div>`;
 }
 /* One building's offices, as a list in a popup (VDA111). Tap a row for that
@@ -3984,6 +4006,78 @@ function repVisitsByDate(){
   });
   return map;
 }
+// ---- MY WEEK: progress against your own usual pace (VDA119) ----------------
+// A small card on the Calendar: this week so far vs the rep's usual BY THE SAME
+// DAY of the week (Mon–Thu vs his average Mon–Thu), from the database function
+// rep_progress() — the same numbers as the dashboard's 🎯 Rep Progress tab.
+// In person = visits logged here; remote = 📞 / ✉️ / 💬 contacts logged from the
+// dashboard. Usual = average of the last 8 weeks with any contact logged (weeks
+// off are left out). Admins see the card for the rep picked on the Calendar.
+const _prog={};
+const PROG_M=[['in_person','🚗','In person'],['remote','📞','Remote'],['offices','🏢','Offices'],['new_offices','✨','New offices'],['field_days','📍','Field days'],['closes','⭐','Closes']];
+const PROG_DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+function progTarget(){
+  if(!isAdmin() || _calRepFilter==="__me__") return {key:"me", id:null, mine:true};
+  if(_calRepFilter==="__all__") return null;
+  const r=repByName(_calRepFilter) || (REPS||[]).find(x=>repMatch(x.name,_calRepFilter));
+  return (r && /^[0-9a-f-]{36}$/i.test(String(r.id||""))) ? {key:String(r.id), id:String(r.id), mine:false, name:r.name} : null;
+}
+function progBase(D,k){
+  const P=(D.periods||[]).slice(0,-1);
+  let st=0;
+  if(k==="remote"){ st=P.findIndex(p=>(+p.remote||0)>0); if(st<0) return {n:0, none:true}; }
+  const act=P.slice(st).filter(p=>(+p.in_person||0)+(+p.remote||0)>0).slice(-8);
+  if(!act.length) return {n:0};
+  const avg=f=>act.reduce((t,p)=>t+(+p[f]||0),0)/act.length;
+  return {n:act.length, full:avg(k), td:avg("td_"+k)};
+}
+function progCardHTML(){
+  const T=progTarget(); if(!T || !cloudOn || !sb) return "";
+  const c=_prog[T.key], who=T.mine?"your":"their";
+  if(!c || !c.data) return `<div class="prog" id="calProg"><div class="prog-hd"><b>📈 ${T.mine?"My week":"Week"} so far</b></div><div class="prog-load">${c&&c.err?esc(c.err):"Loading…"}</div></div>`;
+  const D=c.data, P=D.periods||[], cur=P[P.length-1]||{};
+  const span=(+D.into_days||0)===0?"Monday":"Mon–"+PROG_DOW[Math.min(+D.into_days||0,6)];
+  const tiles=PROG_M.map(([k,ic,l])=>{
+    const v=+cur[k]||0, B=progBase(D,k); let chip;
+    if(k==="remote" && B.none) chip=v?`<span class="prog-c mut">new</span>`:`<span class="prog-c mut">none yet</span>`;
+    else if(B.n<2) chip=`<span class="prog-c mut">building</span>`;
+    else { const u=B.td, d=v-u, tol=Math.max(1,u*0.1), us=Math.round(u*10)/10;
+      chip=Math.abs(d)<=tol?`<span class="prog-c on">on pace · ${us}</span>`
+        : d>0?`<span class="prog-c up">▲${Math.round(d)} · usual ${us}</span>`:`<span class="prog-c dn">▼${Math.round(-d)} · usual ${us}</span>`; }
+    return `<div class="prog-t"><div class="prog-v">${v}</div><div class="prog-l">${ic} ${l}</div>${chip}</div>`;
+  }).join("");
+  const last=P.slice(-8), mx=Math.max(1,...last.map(p=>(+p.in_person||0)+(+p.remote||0)));
+  const act=P.slice(0,-1).filter(p=>(+p.in_person||0)+(+p.remote||0)>0).slice(-8);
+  const usual=act.length?act.reduce((t,p)=>t+(+p.in_person||0)+(+p.remote||0),0)/act.length:null;
+  const bars=last.map((p,i)=>{ const a=+p.in_person||0, r=+p.remote||0, isCur=i===last.length-1;
+    return `<i title="${esc(p.start)}: ${a} in person, ${r} remote" style="height:${Math.max(2,Math.round((a+r)/mx*38))}px"><b style="height:${a+r?Math.round(a/(a+r)*100):0}%;background:${isCur?"var(--teal)":"#a7c4bd"}"></b><b style="height:${a+r?Math.round(r/(a+r)*100):0}%;background:${isCur?"#8b5cf6":"#c4b5fd"}"></b></i>`; }).join("");
+  const line=usual!=null?`<div class="usual" style="bottom:${Math.round(Math.min(usual,mx)/mx*38)}px" title="usual week: ${Math.round(usual)}"></div>`:"";
+  const ax=last.map((p,i)=>{ const d=new Date(p.start+"T00:00:00"); return `<span>${i===last.length-1?"now":(d.getMonth()+1)+"/"+d.getDate()}</span>`; }).join("");
+  const Bn=progBase(D,"in_person").n;
+  return `<div class="prog" id="calProg">
+    <div class="prog-hd"><b>📈 ${T.mine?"My week":esc(T.name||"Week")} so far</b><span>${span} · vs ${who} usual by ${PROG_DOW[Math.min(+D.into_days||0,6)]}</span></div>
+    <div class="prog-grid">${tiles}</div>
+    <div class="prog-bars">${bars}${line}</div><div class="prog-ax">${ax}</div>
+    <div class="prog-ft">Contacts per week · <span style="color:var(--teal-deep);font-weight:700">■</span> in person <span style="color:#8b5cf6;font-weight:700">■</span> remote · dashed = ${who} usual week${Bn?` (last ${Bn} active week${Bn===1?"":"s"})`:""}. Remote = 📞 ✉️ logged from the dashboard.</div>
+  </div>`;
+}
+async function progLoad(force){
+  const T=progTarget(); if(!T || !cloudOn || !sb) return;
+  const c=_prog[T.key];
+  if(c && c.busy) return;
+  if(!force && c && (c.data||c.err) && Date.now()-c.at<120000) return;
+  _prog[T.key]=Object.assign({},c||{},{busy:true});
+  try{
+    const r=await sb.rpc("rep_progress",{p_rep:T.id,p_unit:"week",p_count:26,p_entries:false});   // same 26 weeks as the dashboard, so "usual" matches it exactly
+    if(r.error) throw r.error;
+    _prog[T.key]={at:Date.now(), data:r.data};
+  }catch(e){
+    const m=String((e&&e.message)||e||"");
+    _prog[T.key]={at:Date.now(), err:/rep_progress|schema cache|function/i.test(m)?"Progress isn’t switched on in the database yet.":/sign in|jwt|auth/i.test(m)?"Sign in to see your progress.":"Couldn’t load progress — check your connection."};
+  }
+  const el=document.getElementById("calProg");
+  if(el && state.view==="calendar" && JSON.stringify(progTarget())===JSON.stringify(T)) el.outerHTML=progCardHTML();
+}
 function renderCalendar(){
   if(_loginLock) return;
   const host=document.getElementById('calview'); if(!host) return;
@@ -4038,6 +4132,7 @@ function renderCalendar(){
         `<button class="cal-nav" id="calNext" aria-label="Next month">›</button>`+
       `</div>`+
       pickerHTML+
+      progCardHTML()+
       `<div class="cal-sub">${esc(whoLabel)} · ${monthVisits} visit${monthVisits===1?'':'s'} on ${monthDays} day${monthDays===1?'':'s'}</div>`+
       `<div class="cal-grid cal-dowrow">${dowHead}</div>`+
       `<div class="cal-grid cal-days">${cells}</div>`+
@@ -4050,6 +4145,7 @@ function renderCalendar(){
   host.querySelectorAll('[data-day]').forEach(b=>{ b.onclick=()=>{ const ds=b.getAttribute('data-day');
     _calSelDay = (_calSelDay===ds)?null:ds; renderCalendar(); }; });
   if(_calSelDay) renderCalDayDetail(byDate[_calSelDay]||[], _calSelDay);
+  progLoad();   // VDA119: fills / refreshes the My week card (cached for 2 minutes)
 }
 function renderCalDayDetail(items, ds){
   const host=document.getElementById('calDayDetail'); if(!host) return;
@@ -4148,10 +4244,10 @@ function openDetail(id){
     <div class="dl" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:6px;">Office notes</div>
     <div class="notebox">${stripLab(o.notes)?esc(stripLab(o.notes)):'<span style="color:var(--ink-faint)">No notes yet.</span>'}</div>
     <div class="actions">
-      <button class="btn btn-primary" data-edit="${o.id}">
+      <button class="btn btn-primary" data-edit="${esc(o.id)}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 4H4v16h16v-7"/><path d="M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit / Add Notes</button>
-      <button class="btn btn-ghost" data-movepin="${o.id}">📍 Move pin</button>
-      <button class="btn btn-danger" data-del="${o.id}">
+      <button class="btn btn-ghost" data-movepin="${esc(o.id)}">📍 Move pin</button>
+      <button class="btn btn-danger" data-del="${esc(o.id)}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg> Delete</button>
     </div>`;
   showSheet();
@@ -4210,7 +4306,7 @@ function openForm(id, prefill){
           <button type="button" class="vcolorbtn" data-vc="yellow"><span class="vdot" style="background:${VCOLORS.yellow}"></span>Okay</button>
           <button type="button" class="vcolorbtn" data-vc="red"><span class="vdot" style="background:${VCOLORS.red}"></span>Poor</button>
         </div>
-        <textarea id="f_vnote" class="vnote vnote-area" rows="3" placeholder="Visit notes — who you met, what they said, next steps…"></textarea>
+        <textarea id="f_vnote" class="vnote vnote-area" rows="3" placeholder="Visit notes — who you met, what they said, next steps… No patient names or health details."></textarea>
         <div class="dictate-hint">🎤 To talk instead of type, tap the box, then tap the mic on your keyboard. Your name and the date are stamped on the visit.</div>
         <div id="f_visitlist" class="visitlist"></div>
       </div>
@@ -4232,7 +4328,7 @@ function openForm(id, prefill){
     </div>
     <div class="actions">
       <button class="btn btn-ghost" id="f_cancel">Cancel</button>
-      <button class="btn btn-primary" id="f_save" data-id="${id||''}">
+      <button class="btn btn-primary" id="f_save" data-id="${esc(id||'')}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M5 13l4 4L19 7"/></svg> Save</button>
     </div>`;
   let scan=o.scanner||"";
@@ -5526,6 +5622,8 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
   window.addEventListener("online", maybeCheck);
 })();
 
+// VDA120: refuse to run inside another site's frame (clickjacking)
+try{ if(window.top!==window.self){ document.documentElement.style.display="none"; window.top.location=window.self.location.href; } }catch(e){ document.documentElement.style.display="none"; }
 (function killServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   // Always try to remove any registrations + caches.
