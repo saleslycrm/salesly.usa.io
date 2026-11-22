@@ -18,7 +18,27 @@
      running an old build can always find their way to the newest one. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.jsdelivr.net https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://maps.geoapify.com; connect-src 'self' https://hfzizrzqrneuciykpuez.supabase.co wss://hfzizrzqrneuciykpuez.supabase.co https://nominatim.openstreetmap.org https://api.geocod.io https://api.geoapify.com https://api.openrouteservice.org; frame-src https://www.google.com https://maps.google.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>Salesly VDA121 v121</title>
+<title>Salesly VDA122 v122</title>
+<script>
+/* VDA122: ask for the live version the moment the page opens, while the start screen is
+   still up. A newer build reloads BEHIND the start screen (autoUpdate, below), so an update
+   never flashes the old app first. A page reached through that reload (?b=…) shows the
+   finished mark instead of drawing it again — one continuous start screen. */
+(function () {
+  var VER_RE = /\b(?:VDA|v)[\w.\-]+/, run = (String(document.title).match(VER_RE) || [""])[0];
+  if (/[?&]b=/.test(location.search)) document.documentElement.classList.add('sp-cont');
+  window.__slVerAt = Date.now();
+  window.__slVer = (async function () {
+    if (!run || navigator.onLine === false || !window.fetch) return null;
+    try {
+      var r = await fetch(location.pathname + '?_v=' + Date.now(), { cache: 'no-store', headers: { 'Range': 'bytes=0-2047' } });
+      if (!(r.ok || r.status === 206)) return null;
+      var t = (await r.text()).match(/<title>([^<]*)<\/title>/i), m = t && t[1].match(VER_RE);
+      return m ? m[0] : null;
+    } catch (e) { return null; }
+  })();
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@10..48,400;10..48,600;10..48,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -777,6 +797,8 @@ main{padding:var(--float) var(--float) calc(var(--safe-bottom) + 90px);}
   @keyframes spDraw{to{stroke-dashoffset:0}}
   @keyframes spFade{to{opacity:1}}
   @keyframes spBreathe{50%{opacity:.5}}
+  html.sp-cont #splash .sp-flake .arm,html.sp-cont #splash .sp-flake .vee{animation:none;stroke-dashoffset:0;}
+  html.sp-cont #splash .sp-logo,html.sp-cont #splash .sp-sub{animation:none;opacity:1;}
   @media (prefers-reduced-motion:reduce){ #splash .sp-flake,#splash .sp-flake .arm,#splash .sp-flake .vee,#splash .sp-logo{animation:none;stroke-dashoffset:0;opacity:1;} }
   #splash .sp-sub{font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:3px;color:#5c7179;text-transform:uppercase;opacity:0;animation:spFade .7s .8s ease forwards;}
   #splash .sp-dot{margin-top:18px;width:26px;height:26px;border-radius:50%;border:3px solid #d7e2df;border-top-color:#0d7480;animation:spSpin 0.9s linear infinite;}
@@ -5706,12 +5728,38 @@ async function deepLinkRun(){
    real to look at: the follow map has rendered, OR the login / "Not connected"
    screen needs the user's attention. A hard 8s timeout means a slow network or
    an unexpected error can never leave the splash stuck on screen. */
-function hideSplash(){
+/* VDA122: …and not before the Vitality mark has finished drawing (~1.75 s from opening; a page
+   reloaded for an update shows it finished, so 0), nor while the first version check is still
+   out (at most 1.8 s). If that check finds a newer build the start screen simply stays up: the
+   page is about to reload behind it. */
+const SPLASH_MIN_MS=(document.documentElement.classList.contains('sp-cont') ||
+  (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) ? 0 : 1750;
+let _splashWant=false, _splashT=null;
+/* time left until the mark's last stroke (the V) has drawn, plus a short beat on the finished
+   mark; 0 once it's done, or when it isn't drawn at all (reloaded page, reduced motion) */
+function splashDrawLeft(s){
+  try{
+    const v=s.querySelector('.sp-flake .vee');
+    if(!v || !v.getAnimations) return Math.max(0, SPLASH_MIN_MS-performance.now());
+    const a=v.getAnimations().find(x=>x.playState!=='finished' && x.effect && x.effect.getComputedTiming);
+    if(!a) return 0;
+    return Math.max(0, a.effect.getComputedTiming().endTime-(a.currentTime||0))+200;
+  }catch(e){ return 0; }
+}
+function hideSplash(force){
   const s=document.getElementById('splash'); if(!s||s.classList.contains('gone'))return;
+  if(force!==true){
+    _splashWant=true;
+    if(window.__slUpdating) return;                                   // reloading behind it
+    const waitDraw=splashDrawLeft(s);
+    const waitVer=window.__slVerDone ? 0 : 1800-performance.now();
+    const wait=Math.max(waitDraw, waitVer, 0);
+    if(wait>0){ clearTimeout(_splashT); _splashT=setTimeout(()=>hideSplash(), Math.min(wait, 1800)+20); return; }
+  }
   s.classList.add('gone');
   setTimeout(()=>{ try{ s.remove(); }catch(e){} }, 600);
 }
-setTimeout(hideSplash, 8000);   // absolute failsafe
+setTimeout(()=>hideSplash(true), 8000);   // absolute failsafe
 function startOnMapFollowing(){
   try{
     if(state.view!=="map") setView("map");
@@ -5814,9 +5862,12 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
     return m ? m[0] : null;
   }
 
-  async function check(){
+  async function check(atBoot){
     if(navigator.onLine === false) return;
-    const server = await fetchServerVersion();
+    let server = null;
+    if(atBoot && window.__slVer){ try{ server = await window.__slVer; }catch(_){} }   // VDA122: asked at time zero
+    else server = await fetchServerVersion();
+    if(atBoot){ window.__slVerDone = true; if(_splashWant && !(server && server !== RUNNING)) hideSplash(); }
     if(!server || server === RUNNING) return;
     // Only ever reload ONCE per version per session — no update loops.
     try{ if(sessionStorage.getItem(SEEN_KEY) === server) return; }catch(_){}
@@ -5832,6 +5883,16 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
                  (typeof _popupOpen !== "undefined" && _popupOpen) ||
                  handoff;
     if(busy){ setTimeout(check, 20000); return; }
+    // VDA122: still on the start screen — nothing to interrupt, so reload behind it now
+    // (no toast, no delay); the next page opens on the finished mark.
+    const sp = document.getElementById('splash');
+    if(atBoot && sp && !sp.classList.contains('gone')){
+      try{ sessionStorage.setItem(SEEN_KEY, server); }catch(_){}
+      window.__slUpdating = true;
+      location.replace(location.pathname + "?b=" + server);
+      setTimeout(function(){ window.__slUpdating = false; hideSplash(); }, 6000);   // a reload that never happens can't trap the screen
+      return;
+    }
     // Mark as seen only when actually reloading — the old code marked BEFORE the
     // busy check, so a deferred update was then skipped forever this session.
     try{ sessionStorage.setItem(SEEN_KEY, server); }catch(_){}
@@ -5845,7 +5906,7 @@ if(window.visualViewport){ window.visualViewport.addEventListener('resize', _ref
     check();
   }
 
-  setTimeout(function(){ lastCheck = Date.now(); check(); }, 2500);  // after boot
+  lastCheck = Date.now(); check(true);   // VDA122: at once (the answer was requested at time zero)
   document.addEventListener("visibilitychange", function(){
     if(document.visibilityState === "visible") maybeCheck();
   });
