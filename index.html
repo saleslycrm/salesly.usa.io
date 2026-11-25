@@ -18,7 +18,7 @@
      running an old build can always find their way to the newest one. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.jsdelivr.net https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://maps.geoapify.com; connect-src 'self' https://hfzizrzqrneuciykpuez.supabase.co wss://hfzizrzqrneuciykpuez.supabase.co https://nominatim.openstreetmap.org https://api.geocod.io https://api.geoapify.com https://api.openrouteservice.org; frame-src https://www.google.com https://maps.google.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>Salesly VDA124 v124</title>
+<title>Salesly VDA125 v125</title>
 <script>
 /* VDA122: ask for the live version the moment the page opens, while the start screen is
    still up. A newer build reloads BEHIND the start screen (autoUpdate, below), so an update
@@ -2011,7 +2011,7 @@ function labStatuses(o){
   // of it, or nothing) and no matter what follows the status word (·, a re-encoded
   // separator, or end of line). Only the FIRST alphabetic word after LAB: is read,
   // so "ACTIVE · last case…" and a garbled separator both parse identically.
-  String(nts).split("\n").forEach(l=>{
+  labLinesOnePerDoctor(nts).forEach(l=>{   // VDA125: a doctor with a stale 📊 copy counts once
     const m=l.match(/LAB:\s*([A-Za-z]+)/i);
     if(!m)return;
     const w=m[1].toLowerCase();
@@ -2032,10 +2032,22 @@ function labFilterSet(){
   const g = (state && Array.isArray(state.gLab)) ? state.gLab : [];
   return g.length ? g : null;
 }
+/* VDA125: one lab line per doctor. Old "📊 LAB:" lines that a dashboard sync never replaced sat beside the
+   current "LAB:" ones, so the doctors list showed everyone twice with different figures (Nov 2026).
+   Current-format lines win; the first line per doctor is kept. */
+function labLinesOnePerDoctor(nts){
+  const ls=String(nts||"").split("\n").filter(l=>/LAB:\s*[A-Za-z]/i.test(l));
+  const cur=ls.filter(l=>!/^\s*📊/.test(l)), old=ls.filter(l=>/^\s*📊/.test(l));
+  const seen=new Set(), out=[];
+  cur.concat(old).forEach(l=>{
+    const dr=((l.match(/Dr\.?\s*([^·\u00B7\n]+?)\s*(?:[·\u00B7]|$)/i)||[])[1]||"").trim().toLowerCase().replace(/\s+/g," ");
+    const k=dr||"(practice)"; if(seen.has(k)) return; seen.add(k); out.push(l); });
+  return out;
+}
 function labDoctorStatuses(o){
   const nts=o&&o.notes; if(!nts)return [];
   const out=[];
-  String(nts).split("\n").forEach(l=>{
+  labLinesOnePerDoctor(nts).forEach(l=>{
     // Status may be MULTI-WORD ("NEW DOCTOR") — capture everything up to the
     // first · separator, not just one word. The old single-word pattern
     // couldn't match "NEW DOCTOR" at all, so New doctors at multi-doctor
@@ -2067,7 +2079,7 @@ function labDoctorFigures(o){
   const nts=o&&o.notes; if(!nts) return [];
   const money=v=>{ const n=parseFloat(String(v||'').replace(/[^0-9.]/g,'')); return isFinite(n)?n:null; };
   const out=[];
-  String(nts).split("\n").forEach(l=>{
+  labLinesOnePerDoctor(nts).forEach(l=>{   // VDA125: one line per doctor
     if(!/LAB:\s*[A-Za-z]/i.test(l)) return;
     // a re-encoded separator arrives as "Â·" — drop the stray Â so it reads as ·
     l=String(l).replace(/\u00C2(?=[\u00B7·])/g,'');
@@ -2245,7 +2257,7 @@ function offersCardHTML(o){
     <div class="offertop"><b>${esc(x.cat)}</b><span class="offerconf c-${esc(x.conf)}">${esc(x.conf)}</span><span class="offerval">${esc(x.value)}</span></div>
     <div class="offerdoc">${esc(x.doc)} · ${esc(x.why)}</div>${x.say?`<div class="offersay">“${esc(x.say)}”</div>`:""}</div>`).join("")}</div>`;
 }
-function labLines(nts){ if(!nts)return ""; return String(nts).split("\n").filter(l=>/LAB:\s*[A-Za-z]/i.test(l)).join("\n"); }
+function labLines(nts){ if(!nts)return ""; return labLinesOnePerDoctor(nts).join("\n"); }   // VDA125: once per doctor
 // Imported rows (bridge clients now; future bulk prospect dumps use ids starting
 // with "b") — recognized so imports are never mistaken for rep activity.
 function isImport(o){ return !!labStatus(o)||String((o&&o.id)||"").charAt(0)==="b"; }
@@ -2853,9 +2865,9 @@ function officeQuiet(o){
 }
 /* VDA115: ⭐ GOLDEN LIST — the dashboard marks a Golden doctor's lab line
    "· ⭐ Golden List"; any such line makes the office a Golden account. */
-const isGoldenOffice=o=>/LAB:[^\n]*Golden List/i.test(String((o&&o.notes)||""));
+const isGoldenOffice=o=>{ const n=(o&&o.notes)||""; return /Golden List/i.test(n) && /LAB:[^\n]*Golden List/i.test(labLines(n)); };   // VDA125: current line per doctor
 // VDA116: 🥈 SILVER LIST — "· 🥈 Silver List" on a lab line (Golden wins if both)
-const isSilverOffice=o=>!isGoldenOffice(o)&&/LAB:[^\n]*Silver List/i.test(String((o&&o.notes)||""));
+const isSilverOffice=o=>{ const n=(o&&o.notes)||""; return /Silver List/i.test(n) && !isGoldenOffice(o) && /LAB:[^\n]*Silver List/i.test(labLines(n)); };
 const goldMarkSL=o=>isGoldenOffice(o)?'<span class="gm" title="Golden List">⭐</span>':isSilverOffice(o)?'<span class="gm" title="Silver List">🥈</span>':'';
 function quietLevelSL(bd){ return bd>=20?"red":bd>=15?"orange":bd>=10?"yellow":bd>=5?"teal":null; }
 function quietTipSL(q){
