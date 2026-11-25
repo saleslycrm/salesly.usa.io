@@ -18,7 +18,7 @@
      running an old build can always find their way to the newest one. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.jsdelivr.net https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://maps.geoapify.com; connect-src 'self' https://hfzizrzqrneuciykpuez.supabase.co wss://hfzizrzqrneuciykpuez.supabase.co https://nominatim.openstreetmap.org https://api.geocod.io https://api.geoapify.com https://api.openrouteservice.org; frame-src https://www.google.com https://maps.google.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>Salesly VDA123 v123</title>
+<title>Salesly VDA124 v124</title>
 <script>
 /* VDA122: ask for the live version the moment the page opens, while the start screen is
    still up. A newer build reloads BEHIND the start screen (autoUpdate, below), so an update
@@ -141,6 +141,7 @@ header .sub{font-size:11px;color:#8a9ca3;font-family:var(--mono);margin-top:2px;
 .synclink:active{background:rgba(255,255,255,.16);}
 .syncdot{width:7px;height:7px;border-radius:50%;background:#6f858c;display:inline-block;}
 .syncdot.on{background:#37d39b;box-shadow:0 0 0 2px rgba(55,211,155,.3);}
+.syncdot.wait{background:#e59a1a!important;box-shadow:0 0 0 2px rgba(229,154,26,.3)!important;}   /* VDA124: visits waiting to send */
 .hbtns{display:flex;gap:6px;}
 .hbtn{background:rgba(255,255,255,.12);color:#fff;border-radius:10px;padding:8px 11px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px;}
 .hbtn:active{background:rgba(255,255,255,.25);}
@@ -1487,6 +1488,8 @@ async function cloudPull(){ return loadViewport(null,{force:true}); }
    One upsert per edited office, plus an append to the visit_log ledger.
    log_id = "officeId|YYYY-MM-DD" is the same dedupe key the Apps Script used,
    so re-saving an office can't double-log the same day's visit. */
+const PUSH_BATCH=6;   // VDA124: offices per save batch (see cloudPush)
+let _pushWarnAt=0;
 async function cloudPush(silent){
   if(!cloudOn||!sb||pushing||!DIRTY.size) return false;
   pushing=true;
@@ -1526,53 +1529,13 @@ async function cloudPush(silent){
       console.warn("visit merge skipped:", mergeErr && mergeErr.message);
     }
 
-    // ── BLOCK A: send only the fields this device changed ──────────────────
-    const newIds=[], patchIds=[];
-    ids.forEach(id=>{
-      const o=store.offices[id]; if(!o) return;
-      // An office we've never seen from the server (locally created) needs the
-      // whole row; everything else gets a targeted patch.
-      (o.seed===false && DFIELDS[id] && DFIELDS[id].size ? patchIds : newIds).push(id);
-    });
-    const fullRows=newIds.map(id=>store.offices[id]).filter(Boolean).map(appToDb);
-    if(fullRows.length){
-      const {error}=await withTimeout(sb.from("offices").upsert(fullRows,{onConflict:"id"}), "saving offices");
-      if(error) throw error;
-    }
-    // Guard 1: a big backlog (first sync after a long offline stretch) would fire
-    // one request per office. Past this many, batch as full rows instead.
-    if(patchIds.length>25){
-      const bulk=patchIds.map(id=>store.offices[id]).filter(Boolean).map(appToDb);
-      if(bulk.length){
-        const {error}=await withTimeout(sb.from("offices").upsert(bulk,{onConflict:"id"}), "saving offices");
-        if(error) throw error;
-      }
-      patchIds.length=0;
-    }
-    for(const id of patchIds){
-      const o=store.offices[id]; if(!o) continue;
-      const full=appToDb(o), keys=Array.from(DFIELDS[id]||[]);
-      const patch={};
-      // Map app field names -> db column names via appToDb's own output.
-      const MAPPED={name:"name",addr:"addr",city:"city",state:"state",zip:"zip",lat:"lat",lng:"lng",
-        county:"county",phone:"phone",email:"email",scanner:"scanner",lab:"lab",drs:"drs",hours:"hours",
-        visitDay:"visit_day",notes:"notes",visits:"visits",active:"active",addedBy:"added_by",
-        pinLocked:"pin_locked",pinMovedBy:"pin_moved_by",pinMovedAt:"pin_moved_at",
-        starterKit:"starter_kit",welcomeEmail:"welcome_email",pricelist:"pricelist"};
-      keys.forEach(k=>{ const col=MAPPED[k]; if(col && (col in full)) patch[col]=full[col]; });
-      if(!Object.keys(patch).length) continue;
-      // Guard 2: a patch matching NO row (office deleted or never reached the
-      // server) would vanish silently. .select() tells us what it actually hit;
-      // nothing hit -> fall back to writing the whole row.
-      const {data:hit,error}=await withTimeout(
-        sb.from("offices").update(patch).eq("id",id).select("id"), "saving offices");
-      if(error) throw error;
-      if(!hit || !hit.length){
-        const {error:e2}=await withTimeout(
-          sb.from("offices").upsert([appToDb(o)],{onConflict:"id"}), "saving offices");
-        if(e2) throw e2;
-      }
-    }
+    /* VDA124 — WHY THIS ORDER. Visits sat on reps' phones for up to 8 days (Nov 2026): the save
+       sent every waiting office in ONE request (a single big write once more than 25 were
+       waiting) and wrote the visit ledger last, so one timed-out write — the database was
+       swamped by map requests — threw the whole batch back, every retry, for days.
+       Now: (1) the visit ledger goes first — small rows, append-only, and it is what every
+       report counts; (2) offices go a few at a time, and each batch is marked sent the
+       moment it lands, so a slow moment costs one batch, not everything. */
     const logs=[];
     ids.forEach(id=>{
       const o=store.offices[id]; if(!o) return;
@@ -1580,34 +1543,78 @@ async function cloudPush(silent){
         if(!v||!v.date) return;
         logs.push({
           // log_id includes the AUTHOR so two reps on the same day are two rows.
-          // A one-time SQL migration rewrites old "office|date" ids to match.
           log_id:id+"|"+v.date+"|"+visitRepKey(v), office_id:id,
           office:o.name||"", city:o.city||"", visit_date:v.date,
           status:v.color==="green"?"Good":v.color==="yellow"?"Okay":v.color==="red"?"Poor":"",
           note:v.note||"", rep:v.rep||"",
-          // Without this the row fails the RLS check (rep_id = auth.uid()) and the
-          // visit is silently dropped. The ledger is the source of truth for every
-          // report — a dropped visit here is a visit that never happened.
-          // The visit's OWN author, not whoever happens to be syncing. A rep
-          // syncing an office they didn't visit must not take the credit.
+          // The visit's OWN author, not whoever happens to be syncing.
           rep_id: (v.uid || (sbUser ? sbUser.id : null)) || null
         });
       });
     });
-    if(logs.length){
-      // ignoreDuplicates: the ledger is append-only. An already-logged visit is
-      // a no-op, never an overwrite.
-      const {error}=await withTimeout(sb.from("visit_log").upsert(logs,{onConflict:"log_id",ignoreDuplicates:true}), "saving visits");
+    for(let i=0;i<logs.length;i+=200){
+      let part=logs.slice(i,i+200);
+      let {error}=await withTimeout(sb.from("visit_log").upsert(part,{onConflict:"log_id",ignoreDuplicates:true}), "saving visits");
+      // A rep (not an admin) may only log his own visits; another rep's visit merged onto the
+      // same office is that rep's device's to log. Retry with just this rep's own.
+      if(error && /row-level security|42501|violates/i.test((error.message||"")+" "+(error.code||"")) && sbUser){
+        part=part.filter(r=>!r.rep_id || r.rep_id===sbUser.id);
+        ({error}=part.length ? await withTimeout(sb.from("visit_log").upsert(part,{onConflict:"log_id",ignoreDuplicates:true}), "saving visits") : {error:null});
+      }
       if(error) throw error;
     }
-    ids.forEach(id=>{ DIRTY.delete(id); clearFields(id); });
-    persistDirty();
+    // ── offices, a few at a time; only the fields this device changed ──────
+    const MAPPED={name:"name",addr:"addr",city:"city",state:"state",zip:"zip",lat:"lat",lng:"lng",
+      county:"county",phone:"phone",email:"email",scanner:"scanner",lab:"lab",drs:"drs",hours:"hours",
+      visitDay:"visit_day",notes:"notes",visits:"visits",active:"active",addedBy:"added_by",
+      pinLocked:"pin_locked",pinMovedBy:"pin_moved_by",pinMovedAt:"pin_moved_at",
+      starterKit:"starter_kit",welcomeEmail:"welcome_email",pricelist:"pricelist"};
+    for(let i=0;i<ids.length;i+=PUSH_BATCH){
+      const batch=ids.slice(i,i+PUSH_BATCH), seq={};
+      batch.forEach(id=>seq[id]=EDITSEQ[id]||0);
+      const newIds=[], patchIds=[];
+      batch.forEach(id=>{
+        const o=store.offices[id]; if(!o) return;
+        // An office we've never seen from the server (locally created) needs the
+        // whole row; everything else gets a targeted patch.
+        (o.seed===false && DFIELDS[id] && DFIELDS[id].size ? patchIds : newIds).push(id);
+      });
+      const fullRows=newIds.map(id=>store.offices[id]).filter(Boolean).map(appToDb);
+      if(fullRows.length){
+        const {error}=await withTimeout(sb.from("offices").upsert(fullRows,{onConflict:"id"}), "saving offices");
+        if(error) throw error;
+      }
+      for(const id of patchIds){
+        const o=store.offices[id]; if(!o) continue;
+        const full=appToDb(o), keys=Array.from(DFIELDS[id]||[]);
+        const patch={};
+        keys.forEach(k=>{ const col=MAPPED[k]; if(col && (col in full)) patch[col]=full[col]; });
+        if(!Object.keys(patch).length) continue;
+        // A patch matching NO row (office deleted or never reached the server) would
+        // vanish silently. .select() tells us what it actually hit; nothing hit ->
+        // write the whole row.
+        const {data:hit,error}=await withTimeout(
+          sb.from("offices").update(patch).eq("id",id).select("id"), "saving offices");
+        if(error) throw error;
+        if(!hit || !hit.length){
+          const {error:e2}=await withTimeout(
+            sb.from("offices").upsert([appToDb(o)],{onConflict:"id"}), "saving offices");
+          if(e2) throw e2;
+        }
+      }
+      // this batch is on the server: stop resending it (unless it was edited again meanwhile)
+      batch.forEach(id=>{ if((EDITSEQ[id]||0)===seq[id]){ DIRTY.delete(id); clearFields(id); } });
+      persistDirty();
+    }
     lastSyncAt=Date.now(); lastSyncErr="";
     if(!silent) toast("Synced to team");
     return true;
   }catch(e){
     lastSyncErr=(e&&e.message)?e.message:"push failed";
     if(!silent) toast("⚠️ Sync failed — saved on device");
+    // VDA124: say it out loud (at most every 10 minutes) — a quiet failure is how visits waited days
+    else if(DIRTY.size && Date.now()-_pushWarnAt>600000){ _pushWarnAt=Date.now();
+      toast("⚠️ "+DIRTY.size+" office"+(DIRTY.size===1?"":"s")+" not sent to the team yet — saved on this phone, retrying"); }   // (toast's 2nd argument is an Undo action, so none here)
     return false;
   }finally{
     pushing=false;
@@ -1920,6 +1927,7 @@ function markFields(id, keys){
   persistDFields();
 }
 function clearFields(id){ delete DFIELDS[id]; persistDFields(); }
+const EDITSEQ={};
 function upsertLocal(id, patch){
   const cur=store.offices[id]||{id:id};
   // Only record keys whose VALUE actually changed — an untouched form field
@@ -1931,6 +1939,7 @@ function upsertLocal(id, patch){
   });
   store.offices[id]=Object.assign({},cur,patch,{id:id});
   if(changed.length) markFields(id, changed);
+  EDITSEQ[id]=(EDITSEQ[id]||0)+1;   // VDA124: an edit made while this office's save is in flight keeps it queued
   DIRTY.add(id); persistDirty();
   return store.offices[id];
 }
@@ -5107,6 +5116,10 @@ function setSyncBadge(){
   const dot=document.getElementById('syncDot'), lbl=document.getElementById('syncLabel');
   if(!dot||!lbl) return;
   if(cloudOn){
+    // VDA124: anything not yet on the server is said plainly, with a count
+    if(DIRTY.size){ dot.classList.remove('on'); dot.classList.add('wait');
+      lbl.textContent="Team sync: "+DIRTY.size+" office"+(DIRTY.size===1?"":"s")+" waiting to send"+(lastSyncErr?" · retrying":"")+" — tap to send now"; return; }
+    dot.classList.remove('wait');
     if(lastSyncErr){ dot.classList.remove('on'); lbl.textContent="Team sync: ⚠️ "+lastSyncErr; return; }
     dot.classList.add('on');
     let ago="";
@@ -5565,13 +5578,16 @@ function wire(){
     if(state.view==="map") setTimeout(()=>recoverTiles(true), 250);
     if(!cloudOn) return;
     pulling=false; pushing=false;
+    // VDA124: waiting visits go out first — reloading the map is the heavy request, and it used to
+    // run first and crowd the save out every time the rep opened the app
+    if(DIRTY.size){ try{ await cloudPush(true); }catch(e){} }
     try{ const changed=await cloudPull(); if(changed){ rebuild(); renderActive(); } }catch(e){}
     if(!pollTimer) cloudSubscribe();
   });
   window.addEventListener('focus',()=>{ if(cloudOn&&!pollTimer) cloudSubscribe(); });
   // Connectivity restored (e.g. dead Wi-Fi finally handed off to cellular) —
   // pull the tiles that failed while it was down.
-  window.addEventListener('online', ()=>{ _tileFails=0; recoverTiles(true); });
+  window.addEventListener('online', ()=>{ _tileFails=0; recoverTiles(true); if(cloudOn && DIRTY.size) setTimeout(()=>{ try{ cloudPush(true); }catch(e){} }, 1500); });   // VDA124: signal back → send
   markSeen();
   setInterval(markSeen, 60000);                       // keep it fresh while in use
   document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') markSeen(); });
