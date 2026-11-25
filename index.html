@@ -18,7 +18,7 @@
      running an old build can always find their way to the newest one. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.jsdelivr.net https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://maps.geoapify.com; connect-src 'self' https://hfzizrzqrneuciykpuez.supabase.co wss://hfzizrzqrneuciykpuez.supabase.co https://nominatim.openstreetmap.org https://api.geocod.io https://api.geoapify.com https://api.openrouteservice.org; frame-src https://www.google.com https://maps.google.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>Salesly VDA122 v122</title>
+<title>Salesly VDA123 v123</title>
 <script>
 /* VDA122: ask for the live version the moment the page opens, while the start screen is
    still up. A newer build reloads BEHIND the start screen (autoUpdate, below), so an update
@@ -1272,6 +1272,7 @@ function persistDirty(){
 const APP_VER=(String(document.title).match(/\bVDA[\w.\-]*|\bv[\w.\-]+/i)||[""])[0];
 const VIEWPORT_LIMIT=4000;        // A/B pins per pan. Clustering handles this fine; dense metros (Chicago ~3,800 prospects) now load fully instead of stopping at a few hundred.
 let _lastBox="";                  // dedupe identical viewport queries
+let _vpAgain=false;               // VDA123: the map moved while a load was running — load the new area after it
 let _didInitialFit=false;         // fit the map to the user ONCE on first load, then never yank them back
 
 // Wait for the Supabase CDN script to finish loading. On a FIRST home-screen
@@ -1385,7 +1386,10 @@ async function loadViewport(bounds, opts){
   const sw=b?b.getSouthWest():{lat:41.6,lng:-88.1}, ne=b?b.getNorthEast():{lat:42.1,lng:-87.5};
   const key=[sw.lng.toFixed(3),sw.lat.toFixed(3),ne.lng.toFixed(3),ne.lat.toFixed(3)].join(",");
   if(key===_lastBox && !opts.force) return false;
-  if(pulling) return false;
+  // VDA123: a pan while the last area is still loading used to be dropped, so the
+  // area on screen stayed empty until the rep moved again. Remember it instead and
+  // load wherever the map is once the current load finishes.
+  if(pulling){ _vpAgain=true; return false; }
   pulling=true;
   try{
     let rows=null;
@@ -1442,6 +1446,14 @@ async function loadViewport(bounds, opts){
   }finally{
     pulling=false;
     try{setSyncBadge();}catch(e){}
+    if(_vpAgain){
+      _vpAgain=false;
+      setTimeout(async()=>{
+        if(!cloudOn || _popupOpen || _spiderOpen) return;   // same rule as the pan handler: never yank a pin mid-tap
+        const ch=await loadViewport();
+        if(ch){ try{ rebuild(); renderActive(); }catch(e){} }
+      }, 60);
+    }
   }
 }
 // Direct table read used when the get_offices_in_viewport RPC is unavailable.
